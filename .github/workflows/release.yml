@@ -1,0 +1,104 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build: ${{ steps.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assign a version to this change
+        id: version
+        shell: bash
+        run: |
+          echo "version=0.2.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "build=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_OUTPUT"
+      - name: Test the app and release feed
+        run: |
+          zsh scripts/test.sh
+          python3 -m unittest discover -s Tests/ReleaseTests
+      - name: Build Apple Silicon and Intel app
+        env:
+          STORYWRITER_UNIVERSAL: '1'
+          STORYWRITER_VERSION: ${{ steps.version.outputs.version }}
+          STORYWRITER_BUILD_NUMBER: ${{ steps.version.outputs.build }}
+        run: zsh scripts/build-app.sh
+      - name: Archive the app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/StoryWriter.app "dist/StoryWriter-${VERSION}.zip"
+      - name: Sign and verify the update
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SPARKLE_PRIVATE_KEY" || { echo 'SPARKLE_PRIVATE_KEY is required to publish verified updates.' >&2; exit 1; }
+          key_file="$RUNNER_TEMP/sparkle-key"
+          trap 'rm -f "$key_file"' EXIT
+          umask 077
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$key_file"
+          python3 scripts/package-release.py \
+            --archive "dist/StoryWriter-${VERSION}.zip" --version "$VERSION" --build "$BUILD" \
+            --repository "$GITHUB_REPOSITORY" \
+            --sign-tool "${TMPDIR}StoryWriter-build/arm64/artifacts/sparkle/Sparkle/bin/sign_update" \
+            --key-file "$key_file" --output dist/appcast.xml
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            dist/StoryWriter-*.zip
+            dist/appcast.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: release
+      - name: Publish complete release and update feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A re-run may resume a draft, but published assets are immutable.
+          if gh release view "v${VERSION}" --json isDraft --jq .isDraft > draft-state 2>/dev/null; then
+            if [ "$(cat draft-state)" = false ]; then
+              echo 'This version has already been published.'
+              exit 0
+            fi
+          else
+            gh release create "v${VERSION}" --draft --target "$GITHUB_SHA" \
+              --title "StoryWriter ${VERSION}" --generate-notes
+          fi
+          gh release upload "v${VERSION}" release/* --clobber
+          release_id=$(gh api "repos/${GH_REPO}/releases/tags/v${VERSION}" --jq .id)
+          # GitHub selects the newest semantic version even if builds finish out of order.
+          gh api --method PATCH "repos/${GH_REPO}/releases/${release_id}" \
+            -F draft=false -f make_latest=legacy --silent

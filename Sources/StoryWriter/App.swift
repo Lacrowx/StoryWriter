@@ -31,13 +31,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct StoryWriterApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var store = ProjectStore()
+    @StateObject private var updates = AppUpdates.shared
     var body: some Scene {
         Window("StoryWriter", id: "main") {
             LibraryView().environmentObject(store).tint(AppTheme.accent).accentColor(AppTheme.accent)
-                .onAppear { delegate.store = store }
+                .onAppear { delegate.store = store; updates.start() }
         }
         .defaultSize(width: 1320, height: 860)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…", action: updates.checkForUpdates).disabled(!updates.canCheckForUpdates)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Story…") { NotificationCenter.default.post(name: .newProject, object: ProjectKind.story) }.keyboardShortcut("n")
                 Button("New Reference Collection…") { NotificationCenter.default.post(name: .newProject, object: ProjectKind.research) }.keyboardShortcut("n", modifiers: [.command, .shift])

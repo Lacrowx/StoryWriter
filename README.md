@@ -1,6 +1,16 @@
 # StoryWriter
 
-A native, local-first Mac app for writing stories and collecting reference material. Requires macOS 14 or later. This initial build is for Apple Silicon; the Swift sources also support compiling on an Intel Mac.
+A native, local-first Mac app for writing stories and collecting reference material. Requires macOS 14 or later. GitHub releases include a universal app for Apple Silicon and Intel Macs.
+
+## Downloads and app updates
+
+Download the ZIP from the [latest release](https://github.com/Lacrowx/StoryWriter/releases/latest), extract it, and move **StoryWriter.app** into Applications. Install this release once to add the updater to older builds.
+
+Choose **StoryWriter → Check for Updates…** to find, download, and install a newer version. **Settings → App updates** controls automatic checking and automatic download/installation, both enabled by default. Background checks run about once a day; downloaded updates finish installing when the app quits. StoryWriter saves before quitting, and a failed save keeps the app open unless you explicitly discard the unsaved changes. Projects remain in the app's separate local library.
+
+Updates use [Sparkle](https://sparkle-project.org/documentation/). Both the update feed and app archive carry Ed25519 signatures, verified with the public key bundled in the app. The updater contacts GitHub for releases; writing, project files, and AI review remain local.
+
+These builds are ad-hoc signed and are not Apple-notarized. On the first download, macOS may require you to approve the app in **System Settings → Privacy & Security**. A Developer ID certificate and notarization are required for distribution without that first-install warning; certificates also disclose the registered developer identity.
 
 ## Character continuity beside your manuscript
 
@@ -127,14 +137,20 @@ References: [Osaurus API guide](https://github.com/osaurus-ai/osaurus/blob/main/
 
 ## Build and verification
 
-No external Swift dependencies. Xcode or its command-line tools are required to rebuild.
+Xcode or its command-line tools are required to rebuild. Swift Package Manager downloads the pinned Sparkle dependency; `Package.resolved` is committed.
 
 ```sh
 zsh scripts/build-app.sh
 zsh scripts/test.sh
 ```
 
-The build script creates a release app in `dist`, generates its icon, and signs it locally. It uses a temporary build directory to work within restricted workspace environments. This personal build is locally signed, not notarized for public distribution.
+The build script creates a release app in `dist`, embeds Sparkle and its license, generates its icon, and signs all nested helpers and the app locally. It uses a temporary build directory to work within restricted workspace environments. Set `STORYWRITER_UNIVERSAL=1` to build both architectures. `STORYWRITER_VERSION` and `STORYWRITER_BUILD_NUMBER` override the bundle version for release builds.
+
+### GitHub pipeline
+
+`.github/workflows/release.yml` tests pull requests. Every push to `main` runs the Swift tests and release-feed tests, builds both architectures, packages the universal app, verifies its update signature against the key in the app, and publishes a GitHub release containing the ZIP and signed `appcast.xml`. Failed checks prevent publication. Versions are `0.2.<workflow run number>` with build numbers starting at 1001. Manual workflow runs are supported, and re-running a published version leaves its assets intact. GitHub's latest-release selection uses release dates and semantic versions so older builds finishing later do not become the preferred update.
+
+The repository secret **SPARKLE_PRIVATE_KEY** holds the base64 Ed25519 signing seed. Only its public key belongs in `Resources/update-public-key.txt`; never commit the seed. Keep a secure backup of the seed before changing repositories or secrets, since existing installations trust this key. Pull-request jobs cannot access the signing secret or publish releases. Optional `STORYWRITER_SIGNING_IDENTITY` supports an already-installed signing certificate during local builds; no Developer ID certificate is included or configured in CI.
 
 The tests cover rich text and imported references surviving save/reopen and portable import, revision restoration, source-only collections and debounced autosave, corrupt-file preservation, all publication exports, formatting/correction undo, safe media paths, local endpoint validation, model filtering, exact correction matching, saved project briefs and bounded story context, revision-to-suggestion conversion, repeated-letter spelling checks, Unicode-safe long-document review, inline annotation rebasing, grouped acceptance and undo, preservation of formatting, and whole-manuscript acceptance with stale-text protection.
 

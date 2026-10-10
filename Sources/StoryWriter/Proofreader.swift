@@ -243,6 +243,7 @@ struct AppSettings: View {
     @ObservedObject private var service = LocalGrammarService.shared
     var body: some View {
         Form {
+            UpdateSettings()
             Section("Writing") {
                 Picker("Spelling language", selection: $language) { Text("Detect English / German").tag("auto"); Text("English").tag("en"); Text("Deutsch").tag("de") }
                 Text("Mac spellchecking works even when Osaurus is closed.").font(.caption).foregroundStyle(.secondary)
