@@ -98,7 +98,7 @@ jobs:
               --title "StoryWriter ${VERSION}" --generate-notes
           fi
           gh release upload "v${VERSION}" release/* --clobber
-          release_id=$(gh api "repos/${GH_REPO}/releases/tags/v${VERSION}" --jq .id)
+          release_api=$(gh release view "v${VERSION}" --json apiUrl --jq .apiUrl)
           # GitHub selects the newest semantic version even if builds finish out of order.
-          gh api --method PATCH "repos/${GH_REPO}/releases/${release_id}" \
+          gh api --method PATCH "$release_api" \
             -F draft=false -f make_latest=legacy --silent
