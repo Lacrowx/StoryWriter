@@ -152,6 +152,8 @@ The build script creates a release app in `dist`, embeds Sparkle and its license
 
 The repository secret **SPARKLE_PRIVATE_KEY** holds the base64 Ed25519 signing seed. Only its public key belongs in `Resources/update-public-key.txt`; never commit the seed. Keep a secure backup of the seed before changing repositories or secrets, since existing installations trust this key. Pull-request jobs cannot access the signing secret or publish releases. Optional `STORYWRITER_SIGNING_IDENTITY` supports an already-installed signing certificate during local builds; no Developer ID certificate is included or configured in CI.
 
+Native German name-recognition checks run only when macOS reports German name-tagging support. GitHub runner images may omit those assets; the deterministic discovery, tagging, continuity, saving, and export tests still run. Live Osaurus and Apple model checks require their separately documented opt-in settings.
+
 The tests cover rich text and imported references surviving save/reopen and portable import, revision restoration, source-only collections and debounced autosave, corrupt-file preservation, all publication exports, formatting/correction undo, safe media paths, local endpoint validation, model filtering, exact correction matching, saved project briefs and bounded story context, revision-to-suggestion conversion, repeated-letter spelling checks, Unicode-safe long-document review, inline annotation rebasing, grouped acceptance and undo, preservation of formatting, and whole-manuscript acceptance with stale-text protection.
 
 Set `STORYWRITER_DATA_DIR` when launching the executable to use a separate library for development or testing.

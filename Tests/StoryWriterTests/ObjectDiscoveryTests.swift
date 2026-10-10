@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import NaturalLanguage
 @testable import StoryWriter
 
 final class ObjectDiscoveryTests: XCTestCase {
@@ -19,12 +20,23 @@ final class ObjectDiscoveryTests: XCTestCase {
         XCTAssertTrue(ObjectDiscovery.filter(candidates, text: "Replaced text", objects: [], ignored: []).isEmpty)
     }
 
-    func testNativeRecognitionInEnglishAndGerman() {
-        for (language, text) in [("en", "Elisa walked into the room. Ben handed Elisa a letter."), ("de", "Elisa ging ins Zimmer. Ben gab Elisa einen Brief."), ("auto", "Elisa ging ins Zimmer. Ben gab Elisa einen Brief.")] {
-            let names = ObjectDiscovery.names(in: text, language: language, objects: [], ignored: [])
-            XCTAssertTrue(names.contains { $0.name == "Elisa" }, "\(language): recognized \(names.map(\.name))")
-            XCTAssertTrue(names.allSatisfy { (text as NSString).substring(with: $0.range) == $0.name })
+    func testNativeRecognitionInEnglish() {
+        assertNativeRecognition(language: "en", text: "Elisa walked into the room. Ben handed Elisa a letter.")
+    }
+
+    func testNativeRecognitionInGermanAndAutomaticLanguage() throws {
+        guard NLTagger.availableTagSchemes(for: .word, language: .german).contains(.nameType) else {
+            throw XCTSkip("This macOS installation does not provide German name-recognition assets.")
         }
+        for language in ["de", "auto"] {
+            assertNativeRecognition(language: language, text: "Elisa ging ins Zimmer. Ben gab Elisa einen Brief.")
+        }
+    }
+
+    private func assertNativeRecognition(language: String, text: String, file: StaticString = #filePath, line: UInt = #line) {
+            let names = ObjectDiscovery.names(in: text, language: language, objects: [], ignored: [])
+            XCTAssertTrue(names.contains { $0.name == "Elisa" }, "\(language): recognized \(names.map(\.name))", file: file, line: line)
+            XCTAssertTrue(names.allSatisfy { (text as NSString).substring(with: $0.range) == $0.name }, file: file, line: line)
     }
 
     @MainActor func testExplicitCreationAndIgnoredNamesSaveWithPortableProject() throws {
