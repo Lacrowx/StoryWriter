@@ -57,6 +57,7 @@ struct ContinuityItem: Codable, Identifiable, Equatable {
     var aliases: [String] = []
     var details = ""
     var parentID: UUID?
+    var worldObjectID: UUID?
 }
 
 /// Stored with its chapter so passage edits and scene moves can carry the anchor.
@@ -124,7 +125,8 @@ enum Continuity {
     static func exactMatch(_ items: [ContinuityItem], name: String, category: ContinuityCategory, parentID: UUID? = nil) -> ContinuityItem? {
         let key = normalized(name)
         guard !key.isEmpty else { return nil }
-        return items.first { $0.category == category && $0.parentID == parentID && ([$0.name] + $0.aliases).contains { normalized($0) == key } }
+        let matches = items.filter { $0.category == category && $0.parentID == parentID && ([$0.name] + $0.aliases).contains { normalized($0) == key } }
+        return matches.count == 1 ? matches.first : nil
     }
 
     private struct Segment {
@@ -168,7 +170,7 @@ enum Continuity {
             // Repetition is evidence of a mention, not a new first acquisition.
             if entry.event.action != .reminded { latest[entry.event.itemID] = entry }
         }
-        return (project.continuityItems ?? []).compactMap { item in latest[item.id].map { ContinuityState(item: item, latest: $0) } }
+        return project.trackedContinuityItems.compactMap { item in latest[item.id].map { ContinuityState(item: item, latest: $0) } }
             .sorted { $0.item.name.localizedStandardCompare($1.item.name) == .orderedAscending }
     }
     static func viewpoint(in chapter: Chapter, offset: Int) -> UUID? {
@@ -215,10 +217,75 @@ enum Continuity {
 }
 
 extension StoryProject {
+    /// Only recorded identities appear in character state; World items are offered separately.
+    var trackedContinuityItems: [ContinuityItem] {
+        (continuityItems ?? []).map { item in
+            guard let worldID = item.worldObjectID, let world = worldNotes.first(where: { $0.id == worldID }) else { return item }
+            return continuityDisplay(item, world: world)
+        }
+    }
+
+    private func continuityDisplay(_ item: ContinuityItem, world: WorldNote) -> ContinuityItem {
+        var result = item
+        result.name = world.title
+        var seen = Set([Continuity.normalized(world.title)])
+        result.aliases = ((world.aliases ?? []) + [item.name] + item.aliases).filter {
+            let key = Continuity.normalized($0)
+            return !key.isEmpty && seen.insert(key).inserted
+        }
+        return result
+    }
+
+    /// Reuses an unambiguous manually tracked possession without changing its history.
+    func continuityChoices(for category: ContinuityCategory, parentID: UUID? = nil) -> [ContinuityItem] {
+        var choices = trackedContinuityItems.filter { $0.category == category }
+        guard category == .possession, parentID == nil else { return choices }
+        let objects = worldNotes.filter { $0.category == .object }
+        func names(_ title: String, _ aliases: [String]) -> Set<String> {
+            Set(([title] + aliases).map(Continuity.normalized).filter { !$0.isEmpty })
+        }
+        for world in objects {
+            guard !choices.contains(where: { $0.worldObjectID == world.id }) else { continue }
+            let labels = names(world.title, world.aliases ?? [])
+            let existing = choices.indices.filter {
+                choices[$0].worldObjectID == nil && choices[$0].parentID == nil &&
+                !names(choices[$0].name, choices[$0].aliases).isDisjoint(with: labels)
+            }
+            let matchingWorldObjects = objects.filter { !names($0.title, $0.aliases ?? []).isDisjoint(with: labels) }
+            if existing.count == 1, matchingWorldObjects.count == 1, let index = existing.first {
+                choices[index].worldObjectID = world.id
+                choices[index] = continuityDisplay(choices[index], world: world)
+            } else {
+                choices.append(ContinuityItem(id: world.id, name: world.title, category: .possession,
+                    aliases: world.aliases ?? [], details: [world.summary, world.details].filter { !$0.isEmpty }.joined(separator: "\n\n"), worldObjectID: world.id))
+            }
+        }
+        return choices
+    }
+
+    /// Materialize an offered World item only when the user saves a character change.
+    @discardableResult mutating func useContinuityChoice(_ id: UUID, category: ContinuityCategory, parentID: UUID? = nil) throws -> ContinuityItem {
+        guard let choice = continuityChoices(for: category, parentID: parentID).first(where: { $0.id == id }) else {
+            throw ProjectError.invalid("This item changed or was removed. Choose it again.")
+        }
+        if let index = continuityItems?.firstIndex(where: { $0.id == id }) {
+            continuityItems?[index].worldObjectID = choice.worldObjectID
+            continuityItems?[index].name = choice.name
+            continuityItems?[index].aliases = choice.aliases
+        } else {
+            // Project records have globally unique IDs; the World UUID is only the picker key.
+            var recorded = choice
+            recorded.id = UUID()
+            if continuityItems == nil { continuityItems = [] }
+            continuityItems?.append(recorded)
+            return recorded
+        }
+        return choice
+    }
     @discardableResult mutating func createContinuityItem(name: String, category: ContinuityCategory, aliases: [String] = [], parentID: UUID? = nil) throws -> ContinuityItem {
         let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !Continuity.normalized(title).isEmpty else { throw ProjectError.invalid("Give the tracked item a name.") }
-        if let match = Continuity.exactMatch(continuityItems ?? [], name: title, category: category, parentID: parentID) { return match }
+        if let match = Continuity.exactMatch(continuityChoices(for: category, parentID: parentID), name: title, category: category, parentID: parentID) { return try useContinuityChoice(match.id, category: category, parentID: parentID) }
         if let parentID, !(continuityItems ?? []).contains(where: { $0.id == parentID && $0.category == category }) { throw ProjectError.invalid("Choose a topic in the same category.") }
         let item = ContinuityItem(name: title, category: category, aliases: aliases, parentID: parentID)
         if continuityItems == nil { continuityItems = [] }; continuityItems?.append(item)
@@ -251,6 +318,7 @@ extension StoryProject {
             ancestor = continuityItems?.first(where: { $0.id == id })?.parentID
         }
         guard let t = continuityItems?.firstIndex(where: { $0.id == targetID }) else { return }
+        if target.worldObjectID == nil { continuityItems?[t].worldObjectID = source.worldObjectID }
         let names = target.aliases + [source.name] + source.aliases
         var keys = Set([Continuity.normalized(target.name)])
         continuityItems?[t].aliases = names.filter { keys.insert(Continuity.normalized($0)).inserted }

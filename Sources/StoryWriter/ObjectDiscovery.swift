@@ -100,6 +100,7 @@ final class ObjectNameSession: ObservableObject {
     private var task: Task<Void, Never>?
     private var worker: Task<[ObjectNameSuggestion], Never>?
     private var popover: NSPopover?
+    var popoverVisible: Bool { popover?.isShown == true }
     init(view: ManuscriptTextView) { self.view = view }
     deinit { task?.cancel(); worker?.cancel() }
     func configure(objects: [TaggedProjectObject], ignored: [String], create: @escaping (String, NewObjectKind) -> ProjectTagReference?, ignore: @escaping (String) -> Void) {
@@ -166,6 +167,7 @@ final class ObjectNameSession: ObservableObject {
     func next() { if let first = suggestions.first { show(first) } }
     func show(_ suggestion: ObjectNameSuggestion) {
         guard let view, valid(suggestion) else { return }
+        view.selectionActions?.close()
         close(); view.tagSession?.close(); view.setSelectedRange(suggestion.range); view.scrollRangeToVisible(suggestion.range)
         guard view.window?.isVisible == true, let manager = view.layoutManager, let container = view.textContainer else { return }
         var rect = manager.boundingRect(forGlyphRange: manager.glyphRange(forCharacterRange: suggestion.range, actualCharacterRange: nil), in: container)

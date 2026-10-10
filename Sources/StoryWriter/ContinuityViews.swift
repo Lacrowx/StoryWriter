@@ -84,7 +84,7 @@ struct ContinuityPanel: View {
                                     ForEach(pending) { entry in
                                         Button { library = ContinuityLibraryRequest(itemID: entry.event.itemID) } label: {
                                             VStack(alignment: .leading, spacing: 3) {
-                                                Text(project.continuityItems?.first { $0.id == entry.event.itemID }?.name ?? "Tracked item")
+                                                Text(project.trackedContinuityItems.first { $0.id == entry.event.itemID }?.name ?? "Tracked item")
                                                 Text(entry.event.detached ? "Source changed · needs review" : "Planned · not established yet").font(.caption).foregroundStyle(.secondary)
                                             }
                                         }.buttonStyle(.plain)
@@ -111,7 +111,7 @@ struct ContinuityPanel: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(row.item.name).foregroundStyle(row.latest.event.action.active ? Color.primary : Color.secondary)
                             if let status = row.latest.event.action.status { Text(status).font(.caption).foregroundStyle(.secondary) }
-                            if let parent = project.continuityItems?.first(where: { $0.id == row.item.parentID }) { Text(parent.name).font(.caption2).foregroundStyle(.secondary) }
+                            if let parent = project.trackedContinuityItems.first(where: { $0.id == row.item.parentID }) { Text(parent.name).font(.caption2).foregroundStyle(.secondary) }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }.buttonStyle(.plain).help("See who knows or has this item and its passage history")
                     Menu {
@@ -170,10 +170,11 @@ struct ContinuityRecordSheet: View {
                     }
                     Picker("Add to", selection: $category) { ForEach(ContinuityCategory.allCases) { Text($0.label).tag($0) } }.disabled(request.itemID != nil)
                 }
-                if let parent = project.continuityItems?.first(where: { $0.id == request.parentID }) { Text("New detail of \(parent.name)").font(.caption).foregroundStyle(.secondary) }
+                if let parent = project.trackedContinuityItems.first(where: { $0.id == request.parentID }) { Text("New detail of \(parent.name)").font(.caption).foregroundStyle(.secondary) }
                 TextField("Find an existing item or name a new one", text: $query).textFieldStyle(.roundedBorder).disabled(request.itemID != nil)
                 if request.itemID == nil {
-                    let matches = Continuity.matches(project.continuityItems ?? [], query: query, category: category)
+                    let choices = project.continuityChoices(for: category, parentID: request.parentID)
+                    let matches = Continuity.matches(choices, query: query, category: category)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(matches) { item in
@@ -182,14 +183,15 @@ struct ContinuityRecordSheet: View {
                                         Image(systemName: selectedID == item.id && !creating ? "checkmark.circle.fill" : "circle").foregroundStyle(Color.accentColor)
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(item.name)
+                                            if item.worldObjectID != nil { Text("World item").font(.caption).foregroundStyle(.secondary) }
                                             if !item.aliases.isEmpty { Text("Also called \(item.aliases.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary) }
-                                            if let parent = project.continuityItems?.first(where: { $0.id == item.parentID }) { Text("Detail of \(parent.name)").font(.caption).foregroundStyle(.secondary) }
+                                            if let parent = project.trackedContinuityItems.first(where: { $0.id == item.parentID }) { Text("Detail of \(parent.name)").font(.caption).foregroundStyle(.secondary) }
                                         }
                                         Spacer()
                                     }.padding(8).contentShape(Rectangle())
                                 }.buttonStyle(.plain)
                             }
-                            if !Continuity.normalized(query).isEmpty && Continuity.exactMatch(project.continuityItems ?? [], name: query, category: category, parentID: request.parentID) == nil {
+                            if !Continuity.normalized(query).isEmpty && Continuity.exactMatch(choices, name: query, category: category, parentID: request.parentID) == nil {
                                 Button { creating = true; selectedID = nil; error = nil } label: {
                                     Label("Create separate \(category.noun.lowercased()): “\(query.trimmingCharacters(in: .whitespacesAndNewlines))”", systemImage: creating ? "checkmark.circle.fill" : "plus.circle").multilineTextAlignment(.leading)
                                 }.buttonStyle(.plain).padding(8)
@@ -227,23 +229,23 @@ struct ContinuityRecordSheet: View {
             let project = store.project(projectID)
             characterID = request.characterID ?? project?.characters.first?.id
             category = request.category; action = request.action; selectedID = request.itemID
-            query = project?.continuityItems?.first { $0.id == request.itemID }?.name ?? ""
+            query = project?.trackedContinuityItems.first { $0.id == request.itemID }?.name ?? ""
         }
         .onChange(of: query) { _, value in
             if request.itemID == nil {
-                selectedID = Continuity.exactMatch(store.project(projectID)?.continuityItems ?? [], name: value, category: category, parentID: request.parentID)?.id
+                selectedID = Continuity.exactMatch(store.project(projectID)?.continuityChoices(for: category, parentID: request.parentID) ?? [], name: value, category: category, parentID: request.parentID)?.id
                 creating = false; error = nil
             }
         }
         .onChange(of: category) { _, value in
-            if request.itemID == nil { action = value.actions[0]; selectedID = nil; creating = false; error = nil }
+            if request.itemID == nil { action = value.actions[0]; selectedID = Continuity.exactMatch(store.project(projectID)?.continuityChoices(for: value, parentID: request.parentID) ?? [], name: query, category: value, parentID: request.parentID)?.id; creating = false; error = nil }
         }
     }
     private func save() {
         guard var project = store.project(projectID), let characterID else { return }
         do {
             let item: ContinuityItem
-            if let selectedID, let selected = project.continuityItems?.first(where: { $0.id == selectedID }), !creating { item = selected }
+            if let selectedID, !creating { item = try project.useContinuityChoice(selectedID, category: category, parentID: request.parentID) }
             else if creating { item = try project.createContinuityItem(name: query, category: category, parentID: request.parentID) }
             else { return }
             try project.recordContinuity(itemID: item.id, characterID: characterID, action: action, chapterID: timing == "start" ? nil : request.chapterID, range: request.range, expectedText: request.expectedText, note: note, planned: timing == "plan")
@@ -271,17 +273,17 @@ struct ContinuityLibrarySheet: View {
                     VStack(alignment: .leading, spacing: 10) {
                         TextField("Find information, items, tasks…", text: $query).textFieldStyle(.roundedBorder)
                         List(selection: $selectedID) {
-                            ForEach(Continuity.matches(project.continuityItems ?? [], query: query)) { item in
+                            ForEach(Continuity.matches(project.trackedContinuityItems, query: query)) { item in
                                 VStack(alignment: .leading, spacing: 3) { Text(item.name); Text(item.category.noun).font(.caption).foregroundStyle(.secondary) }.tag(item.id)
                             }
                         }
                     }.frame(minWidth: 200, idealWidth: 240, maxWidth: 280).padding(.trailing, 12)
-                    if let item = project.continuityItems?.first(where: { $0.id == selectedID }) {
+                    if let item = project.trackedContinuityItems.first(where: { $0.id == selectedID }) {
                         ContinuityItemDetails(projectID: projectID, itemID: item.id, chapterID: chapterID, editor: editor, merged: { selectedID = $0 }, go: { target in dismiss(); navigate(target) }).id(item.id).frame(minWidth: 390)
                     } else {
                         VStack(spacing: 12) {
                             Image(systemName: "list.bullet.rectangle").font(.largeTitle)
-                            Text((project.continuityItems ?? []).isEmpty ? "Track something from the Continuity sidebar or a selected manuscript passage." : "Choose an item to see who learned it, when, and from which passage.").foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            Text(project.trackedContinuityItems.isEmpty ? "Track something from the Continuity sidebar or a selected manuscript passage." : "Choose an item to see who learned it, when, and from which passage.").foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }.padding(30).frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
@@ -306,7 +308,7 @@ struct ContinuityItemDetails: View {
     @State private var error: String?
 
     var body: some View {
-        if let project = store.project(projectID), let item = project.continuityItems?.first(where: { $0.id == itemID }) {
+        if let project = store.project(projectID), let item = project.trackedContinuityItems.first(where: { $0.id == itemID }) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     HStack(alignment: .top) {
@@ -314,7 +316,7 @@ struct ContinuityItemDetails: View {
                         Spacer()
                         Button("Edit") { name = item.name; aliases = item.aliases.joined(separator: ", "); details = item.details; editing.toggle() }
                     }
-                    if let parent = project.continuityItems?.first(where: { $0.id == item.parentID }) { Text("Detail of \(parent.name)").font(.caption).foregroundStyle(.secondary) }
+                    if let parent = project.trackedContinuityItems.first(where: { $0.id == item.parentID }) { Text("Detail of \(parent.name)").font(.caption).foregroundStyle(.secondary) }
                     if editing {
                         TextField("Name", text: $name).textFieldStyle(.roundedBorder)
                         TextField("Other names, separated by commas", text: $aliases).textFieldStyle(.roundedBorder)
@@ -324,7 +326,7 @@ struct ContinuityItemDetails: View {
                         if !item.aliases.isEmpty { Text("Also called \(item.aliases.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary) }
                         if !item.details.isEmpty { Text(item.details).font(.callout) }
                     }
-                    let children = (project.continuityItems ?? []).filter { $0.parentID == item.id }
+                    let children = project.trackedContinuityItems.filter { $0.parentID == item.id }
                     if !children.isEmpty { Text("Details tracked separately").font(.headline); ForEach(children) { child in Button(child.name) { merged(child.id) } } }
                     Divider()
                     Text(item.category == .knowledge ? "Who learned this?" : "Character history").font(.headline)
@@ -361,12 +363,12 @@ struct ContinuityItemDetails: View {
                     }
                     Divider()
                     Menu("Merge this item with…") {
-                        ForEach((project.continuityItems ?? []).filter { $0.id != itemID && $0.category == item.category }) { target in Button(target.name) { mergeTarget = target.id } }
-                    }.disabled((project.continuityItems ?? []).filter { $0.category == item.category }.count < 2)
+                        ForEach(project.trackedContinuityItems.filter { $0.id != itemID && $0.category == item.category }) { target in Button(target.name) { mergeTarget = target.id } }
+                    }.disabled(project.trackedContinuityItems.filter { $0.category == item.category }.count < 2)
                     if let error { Text(error).font(.caption).foregroundStyle(.red) }
                 }.padding(.leading, 14).padding(.trailing, 6)
             }
-            .confirmationDialog("Merge “\(item.name)” with “\(project.continuityItems?.first { $0.id == mergeTarget }?.name ?? "item")”? Both passage histories and alternate names will be kept.", isPresented: Binding(get: { mergeTarget != nil }, set: { if !$0 { mergeTarget = nil } })) {
+            .confirmationDialog("Merge “\(item.name)” with “\(project.trackedContinuityItems.first { $0.id == mergeTarget }?.name ?? "item")”? Both passage histories and alternate names will be kept.", isPresented: Binding(get: { mergeTarget != nil }, set: { if !$0 { mergeTarget = nil } })) {
                 Button("Merge items") {
                     guard let target = mergeTarget else { return }
                     if store.changeContinuity(projectID, { try $0.mergeContinuityItem(itemID, into: target) }) { merged(target) }
@@ -383,12 +385,15 @@ struct ContinuityItemDetails: View {
         } else { Text("Before the story").font(.caption).foregroundStyle(.secondary) }
     }
     private func saveDetails() {
-        guard var project = store.project(projectID), let index = project.continuityItems?.firstIndex(where: { $0.id == itemID }), let item = project.continuityItems?[index] else { return }
+        guard var project = store.project(projectID), let index = project.trackedContinuityItems.firstIndex(where: { $0.id == itemID }), let item = project.continuityItems?[index] else { return }
         let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !Continuity.normalized(title).isEmpty else { error = "Give this item a name."; return }
         let names = aliases.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        let others = (project.continuityItems ?? []).filter { $0.id != itemID }
+        let others = project.trackedContinuityItems.filter { $0.id != itemID }
         if ([title] + names).contains(where: { Continuity.exactMatch(others, name: $0, category: item.category, parentID: item.parentID) != nil }) { error = "An item already uses this name. Merge the items if they mean the same thing."; return }
+        if let worldID = item.worldObjectID, let worldIndex = project.worldNotes.firstIndex(where: { $0.id == worldID }) {
+            project.worldNotes[worldIndex].title = title; project.worldNotes[worldIndex].aliases = names
+        }
         project.continuityItems?[index].name = title; project.continuityItems?[index].aliases = names; project.continuityItems?[index].details = details
         store.update(projectID) { $0 = project }; editing = false; error = nil
     }

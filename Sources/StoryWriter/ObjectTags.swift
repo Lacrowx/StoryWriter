@@ -81,20 +81,68 @@ enum ObjectTags {
                 return a == b ? $0.title.localizedStandardCompare($1.title) == .orderedAscending : a < b
             }
     }
-    static func queryRange(in text: String, selection: NSRange) -> NSRange? {
+    static func queryRange(in text: String, selection: NSRange, objects: [TaggedProjectObject] = []) -> NSRange? {
         let text = text as NSString
         guard selection.length == 0, selection.location <= text.length else { return nil }
         let scan = NSRange(location: max(0, selection.location - 100), length: min(100, selection.location))
         let at = text.range(of: "@", options: .backwards, range: scan)
         guard at.location != NSNotFound else { return nil }
+        let range = NSRange(location: at.location, length: selection.location - at.location)
         if at.location > 0 {
             let preceding = text.substring(with: text.rangeOfComposedCharacterSequence(at: at.location - 1))
-            guard preceding.allSatisfy({ $0.isWhitespace }) || "([{\"'“‘".contains(preceding) else { return nil }
+            let separated = preceding.allSatisfy({ $0.isWhitespace }) || "([{\"'“‘".contains(preceding)
+            // A bare @ immediately after a known name is a request to tag it.
+            guard separated || (range.length == 1 && objects.contains {
+                existingMention(in: text as String, object: $0, beside: range)?.upperBound == at.location
+            }) else { return nil }
         }
-        let range = NSRange(location: at.location, length: selection.location - at.location)
         let query = text.substring(with: NSRange(location: at.location + 1, length: range.length - 1))
         guard !query.contains(where: { $0.isNewline || ",.;:!?@)]}".contains($0) }) else { return nil }
         return range
+    }
+    static func nameChoices(_ object: TaggedProjectObject) -> [String] {
+        var names = [object.title] + object.aliases
+        if object.reference.kind == .character, let first = object.title.split(whereSeparator: \.isWhitespace).first, first.count >= 2 {
+            names.append(String(first))
+        }
+        var seen = Set<String>()
+        return names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+    }
+    static func existingMention(in text: String, object: TaggedProjectObject, beside trigger: NSRange) -> NSRange? {
+        let source = text as NSString
+        guard trigger.location >= 0, NSMaxRange(trigger) <= source.length else { return nil }
+        let names = nameChoices(object).sorted { $0.utf16.count > $1.utf16.count }
+        // Only inspect the words beside the trigger, even in a long chapter.
+        let reach = (names.map { $0.utf16.count }.max() ?? 0) * 2 + 64
+        let beforeStart = max(0, trigger.location - reach)
+        let before = NSRange(location: beforeStart, length: trigger.location - beforeStart)
+        let after = NSRange(location: NSMaxRange(trigger), length: min(reach, source.length - NSMaxRange(trigger)))
+        func horizontalSpace(_ text: String) -> Bool { text.allSatisfy { $0.isWhitespace && !$0.isNewline } }
+        for name in names {
+            let words = name.split(whereSeparator: \.isWhitespace).map { NSRegularExpression.escapedPattern(for: String($0)) }
+            let pattern = "(?<![\\p{L}\\p{M}\\p{N}_])" + words.joined(separator: "[ \\t\\u00a0]+") + "(?![\\p{L}\\p{M}\\p{N}_])"
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            // Prefer the longest complete label, preserving its existing spelling.
+            if let match = regex.matches(in: text, options: [.withTransparentBounds], range: before).last,
+               horizontalSpace(source.substring(with: NSRange(location: NSMaxRange(match.range), length: trigger.location - NSMaxRange(match.range)))) {
+                return match.range
+            }
+            if let match = regex.firstMatch(in: text, options: [.withTransparentBounds], range: after),
+               horizontalSpace(source.substring(with: NSRange(location: after.location, length: match.range.location - after.location))) {
+                return match.range
+            }
+            // @ was inserted into existing prose and the caret is inside the name.
+            if trigger.length > 0 {
+                let suffixStart = trigger.location + 1
+                let suffix = NSRange(location: suffixStart, length: min(reach, source.length - suffixStart))
+                if let match = regex.firstMatch(in: text, options: [.anchored, .withTransparentBounds], range: suffix),
+                   (NSMaxRange(match.range) >= NSMaxRange(trigger) ||
+                    horizontalSpace(source.substring(with: NSRange(location: NSMaxRange(match.range), length: NSMaxRange(trigger) - NSMaxRange(match.range))))) {
+                    return match.range
+                }
+            }
+        }
+        return nil
     }
     static func publicationText(_ source: NSAttributedString) -> NSAttributedString {
         let result = NSMutableAttributedString(attributedString: source)
@@ -129,9 +177,11 @@ final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
     var ignoreName: (String) -> Void = { _ in }
     @Published var suggestions: [TaggedProjectObject] = []
     @Published var highlighted = 0
+    @Published var selectedLabel: String?
     @Published var newName: String?
     private var popup: NSPopover?
     private var queryRange: NSRange?
+    private var chosenReference: ProjectTagReference?
     private var detailsPopup: NSPopover?
     private var scrollObserver: NSObjectProtocol?
     private(set) var inspectedReference: ProjectTagReference?
@@ -141,15 +191,17 @@ final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
     var visible: Bool { popup?.isShown == true }
     init(view: ManuscriptTextView) { self.view = view; super.init() }
 
-    func close() { popup?.close(); popup = nil; queryRange = nil; closeDetails() }
+    func close() { popup?.close(); popup = nil; queryRange = nil; selectedLabel = nil; chosenReference = nil; closeDetails() }
     func closeDetails() {
-        detailsPopup?.close(); detailsPopup = nil; inspectedReference = nil; detailsAnchor = nil
+        let popup = detailsPopup
+        detailsPopup = nil; inspectedReference = nil; detailsAnchor = nil
+        popup?.close()
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
         scrollObserver = nil
     }
     func popoverDidClose(_ notification: Notification) {
         if let closed = notification.object as? NSPopover, closed === detailsPopup { closeDetails() }
-        else if let closed = notification.object as? NSPopover, closed === popup { popup = nil; queryRange = nil }
+        else if let closed = notification.object as? NSPopover, closed === popup { popup = nil; queryRange = nil; selectedLabel = nil; chosenReference = nil }
     }
     private func detailsBubble(for reference: ProjectTagReference) -> ObjectTagDetailsBubble {
         ObjectTagDetailsBubble(object: objects.first { $0.reference == reference }, close: { [weak self] in self?.closeDetails() }, open: { [weak self] in
@@ -187,17 +239,17 @@ final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
         return true
     }
     func refreshSuggestions() {
-        guard !inserting, let view, let range = ObjectTags.queryRange(in: view.string, selection: view.selectedRange()) else { close(); return }
+        guard !inserting, let view, let range = ObjectTags.queryRange(in: view.string, selection: view.selectedRange(), objects: objects) else { close(); return }
         queryRange = range
         let query = (view.string as NSString).substring(with: NSRange(location: range.location + 1, length: range.length - 1))
-        suggestions = ObjectTags.matches(objects, query: query); highlighted = 0
+        suggestions = ObjectTags.matches(objects, query: query); highlighted = 0; selectedLabel = nil; chosenReference = nil
         let name = query.trimmingCharacters(in: .whitespacesAndNewlines)
         newName = suggestions.isEmpty && name.count >= 2 && name.count <= 100 && name.contains(where: \.isLetter) ? name : nil
         present()
     }
     func browse() {
         guard let view else { return }
-        queryRange = nil; newName = nil; suggestions = ObjectTags.matches(objects, query: ""); highlighted = 0
+        queryRange = nil; newName = nil; suggestions = ObjectTags.matches(objects, query: ""); highlighted = 0; selectedLabel = nil; chosenReference = nil
         view.window?.makeFirstResponder(view); present()
     }
     private func present() {
@@ -222,35 +274,87 @@ final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
         guard visible else { return false }
         switch event.keyCode {
         case 53: close(); return true
-        case 125: if !suggestions.isEmpty { highlighted = min(highlighted + 1, suggestions.count - 1) }; return true
-        case 126: highlighted = max(0, highlighted - 1); return true
+        case 125: if !suggestions.isEmpty { highlighted = min(highlighted + 1, suggestions.count - 1); selectedLabel = nil; chosenReference = suggestions[highlighted].reference }; return true
+        case 126: highlighted = max(0, highlighted - 1); selectedLabel = nil
+            if suggestions.indices.contains(highlighted) { chosenReference = suggestions[highlighted].reference }; return true
+        case 123, 124:
+            guard event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
+            guard suggestions.indices.contains(highlighted) else { return false }
+            let object = suggestions[highlighted], names = ObjectTags.nameChoices(object)
+            let current = names.firstIndex { $0.caseInsensitiveCompare(insertionLabel(for: object)) == .orderedSame } ?? 0
+            let next = (current + (event.keyCode == 124 ? 1 : names.count - 1)) % max(1, names.count)
+            if names.indices.contains(next) { selectedLabel = names[next] }
+            return true
+        case 49:
+            guard event.characters == " ", event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+                  view?.hasMarkedText() != true, let choice = spaceCompletion() else { return false }
+            return insert(choice.object, label: choice.label, trailingSpace: true)
         case 36, 48, 76:
             guard suggestions.indices.contains(highlighted) else { close(); return false }
-            insert(suggestions[highlighted]); return true
+            insert(suggestions[highlighted], label: selectedLabel); return true
         default: return false
         }
     }
-    func insert(_ object: TaggedProjectObject) {
-        guard let view, objects.contains(where: { $0.reference == object.reference }) else { close(); return }
-        let selected = queryRange ?? view.selectedRange()
-        guard NSMaxRange(selected) <= view.string.utf16.count else { close(); return }
-        let label: NSAttributedString
-        if queryRange == nil, selected.length > 0, let storage = view.textStorage {
-            label = storage.attributedSubstring(from: selected)
-        } else {
-            var attributes = view.typingAttributes; attributes.removeValue(forKey: .link)
-            label = NSAttributedString(string: object.title, attributes: attributes)
+    private func spaceCompletion() -> (object: TaggedProjectObject, label: String?)? {
+        guard let view, let range = queryRange,
+              ObjectTags.queryRange(in: view.string, selection: view.selectedRange(), objects: objects) == range else { return nil }
+        if suggestions.indices.contains(highlighted) {
+            let object = suggestions[highlighted]
+            if selectedLabel != nil || chosenReference == object.reference { return (object, selectedLabel) }
         }
-        let tagged = NSMutableAttributedString(attributedString: label)
+        let query = (view.string as NSString).substring(with: NSRange(location: range.location + 1, length: range.length - 1)).trimmingCharacters(in: .whitespaces)
+        // Ordinary spaces must still work inside multiword names, and shared aliases need an explicit choice.
+        let exact = suggestions.filter { object in
+            ObjectTags.nameChoices(object).contains { $0.caseInsensitiveCompare(query) == .orderedSame }
+        }
+        return exact.count == 1 ? (exact[0], nil) : nil
+    }
+
+    func insertionLabel(for object: TaggedProjectObject) -> String {
+        if suggestions.indices.contains(highlighted), suggestions[highlighted].reference == object.reference, let selectedLabel { return selectedLabel }
+        guard let view else { return object.title }
+        let selected = queryRange ?? view.selectedRange()
+        if queryRange == nil, selected.location >= 0, selected.length > 0, NSMaxRange(selected) <= view.string.utf16.count {
+            return (view.string as NSString).substring(with: selected)
+        }
+        if let mention = ObjectTags.existingMention(in: view.string, object: object, beside: selected) {
+            return (view.string as NSString).substring(with: mention)
+        }
+        return object.title
+    }
+
+    @discardableResult func insert(_ object: TaggedProjectObject, label: String? = nil, trailingSpace: Bool = false) -> Bool {
+        guard let view, objects.contains(where: { $0.reference == object.reference }),
+              label.map({ ObjectTags.nameChoices(object).contains($0) }) ?? true else { close(); return false }
+        var selected = queryRange ?? view.selectedRange()
+        guard selected.location >= 0, selected.location != NSNotFound, NSMaxRange(selected) <= view.string.utf16.count else { close(); return false }
+        let tagged: NSMutableAttributedString
+        if (queryRange != nil || selected.length == 0), let storage = view.textStorage,
+           let mention = ObjectTags.existingMention(in: view.string, object: object, beside: selected) {
+            // The combined range contains only the trigger, its query, and the known name.
+            // Keep the name's exact original spelling and attributes unless another label was chosen.
+            let original = storage.attributedSubstring(from: mention)
+            tagged = NSMutableAttributedString(attributedString: label.map { GrammarText.replacement(original, with: $0) } ?? original)
+            selected = NSUnionRange(selected, mention)
+        } else if queryRange == nil, selected.length > 0, let storage = view.textStorage {
+            let original = storage.attributedSubstring(from: selected)
+            tagged = NSMutableAttributedString(attributedString: label.map { GrammarText.replacement(original, with: $0) } ?? original)
+        } else {
+            // A partial query completes to the full name; an exact alias retains its own spelling.
+            var attributes = view.typingAttributes; attributes.removeValue(forKey: .link)
+            tagged = NSMutableAttributedString(string: label ?? object.title, attributes: attributes)
+        }
         tagged.addAttribute(.link, value: object.reference.url, range: NSRange(location: 0, length: tagged.length))
-        inserting = true; close()
         var typing = view.typingAttributes; typing.removeValue(forKey: .link)
+        if trailingSpace { tagged.append(NSAttributedString(string: " ", attributes: typing)) }
+        inserting = true; close()
         view.window?.makeFirstResponder(view); view.breakUndoCoalescing()
         view.undoManager?.beginUndoGrouping()
-        view.insertText(tagged, replacementRange: selected)
+        let changed = view.replaceAttributedText(tagged, range: selected)
         view.undoManager?.endUndoGrouping()
         view.typingAttributes = typing; view.undoManager?.setActionName("Tag project object")
         inserting = false
+        return changed
     }
     func createNew(_ kind: NewObjectKind) {
         guard let name = newName, let range = queryRange, let view,
@@ -317,7 +421,7 @@ private struct ObjectTagSuggestions: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack { Label("Tag a project object", systemImage: "tag").font(.headline); Spacer(); Button { session.close() } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close suggestions · Escape") }
-            Text(session.newName == nil ? "↑ ↓ to choose · Return to tag · Esc to close" : "Choose how to add this name · Esc to close").font(.caption).foregroundStyle(.secondary)
+            Text(session.newName == nil ? "↑ ↓ object · ← → name · Space / Return to tag" : "Choose how to add this name · Esc to close").font(.caption).foregroundStyle(.secondary)
             if let name = session.newName {
                 Text("No matching object for “\(name)”.").foregroundStyle(.secondary)
                 ForEach(NewObjectKind.allCases) { kind in
@@ -329,19 +433,62 @@ private struct ObjectTagSuggestions: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(session.suggestions.enumerated()), id: \.element.id) { index, object in
-                            Button { session.insert(object) } label: {
-                                HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: object.symbol).frame(width: 20)
-                                    VStack(alignment: .leading, spacing: 3) { Text(object.title).fontWeight(.medium); Text(object.group + (object.summary.isEmpty ? "" : " · " + object.summary)).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-                                    Spacer()
-                                }.padding(9).frame(maxWidth: .infinity, alignment: .leading).background(index == session.highlighted ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 6))
-                            }.buttonStyle(.plain).id(object.id)
+                            VStack(alignment: .leading, spacing: 8) {
+                                Button { session.insert(object, label: index == session.highlighted ? session.selectedLabel : nil) } label: {
+                                    HStack(alignment: .top, spacing: 10) {
+                                        Image(systemName: object.symbol).frame(width: 20)
+                                        VStack(alignment: .leading, spacing: 3) { Text(object.title).fontWeight(.medium); Text(object.group + (object.summary.isEmpty ? "" : " · " + object.summary)).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                                        Spacer()
+                                    }.contentShape(Rectangle())
+                                }.buttonStyle(.plain)
+                                let names = ObjectTags.nameChoices(object)
+                                if names.count > 1 {
+                                    Text("Insert as").font(.caption2).foregroundStyle(.secondary)
+                                    TagNameChoiceLayout {
+                                        ForEach(names, id: \.self) { name in
+                                            let active = name.caseInsensitiveCompare(session.insertionLabel(for: object)) == .orderedSame
+                                            Button { session.insert(object, label: name) } label: {
+                                                HStack(spacing: 4) {
+                                                    if active { Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)) }
+                                                    Text(name).fixedSize(horizontal: false, vertical: true)
+                                                }.font(.caption).padding(.horizontal, 8).padding(.vertical, 5)
+                                                    .background(active ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.06), in: Capsule())
+                                                    .overlay(Capsule().strokeBorder(active ? Color.accentColor.opacity(0.65) : Color.primary.opacity(0.12), lineWidth: 1))
+                                            }.buttonStyle(.plain).accessibilityLabel("Tag as \(name)").help("Use \(name) in the text, linked to \(object.title)")
+                                        }
+                                    }
+                                }
+                            }.padding(9).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(index == session.highlighted ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8)).id(object.id)
                         }
                     }
                 }.frame(maxHeight: 280)
                     .onChange(of: session.highlighted) { _, value in if session.suggestions.indices.contains(value) { proxy.scrollTo(session.suggestions[value].id) } }
             } }
         }.padding(16).frame(width: 340).tint(AppTheme.accent)
+    }
+}
+
+/// Natural-width name buttons wrap inside the bubble, including long aliases.
+private struct TagNameChoiceLayout: Layout {
+    private func positions(_ subviews: Subviews, width: CGFloat) -> (points: [CGPoint], size: CGSize) {
+        var points: [CGPoint] = [], x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, usedWidth: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            if x > 0 && x + size.width > width { x = 0; y += rowHeight + 6; rowHeight = 0 }
+            points.append(CGPoint(x: x, y: y)); usedWidth = max(usedWidth, x + size.width)
+            x += size.width + 6; rowHeight = max(rowHeight, size.height)
+        }
+        return (points, CGSize(width: usedWidth, height: y + rowHeight))
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        positions(subviews, width: proposal.width ?? 304).size
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let layout = positions(subviews, width: bounds.width)
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + layout.points[index].x, y: bounds.minY + layout.points[index].y), anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
+        }
     }
 }
 
@@ -361,16 +508,10 @@ private struct ObjectTagDetailsBubble: View {
                 Button(action: close) { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close details · Escape").keyboardShortcut(.cancelAction)
             }
             if let object {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if !object.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Text(object.summary).fixedSize(horizontal: false, vertical: true) }
-                        if !object.aliases.isEmpty { detail("Also known as", text: object.aliases.joined(separator: ", ")) }
-                        ForEach(object.details) { field in detail(field.title, text: field.text) }
-                        if object.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && object.details.isEmpty {
-                            Text("No details yet. Open the profile to add them.").foregroundStyle(.secondary)
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                }.frame(maxHeight: 300)
+                ViewThatFits(in: .vertical) {
+                    detailContent(object).fixedSize(horizontal: false, vertical: true)
+                    ScrollView { detailContent(object) }
+                }.frame(maxHeight: 300).fixedSize(horizontal: false, vertical: true)
                 Divider()
                 Button(action: open) { Label("Open full profile", systemImage: "sidebar.right").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).foregroundStyle(AppTheme.accent)
             } else {
@@ -379,6 +520,16 @@ private struct ObjectTagDetailsBubble: View {
             }
             Text("Option-click tagged words to edit the text.").font(.caption2).foregroundStyle(.secondary)
         }.padding(18).frame(width: 340).tint(AppTheme.accent)
+    }
+    private func detailContent(_ object: TaggedProjectObject) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if !object.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Text(object.summary).fixedSize(horizontal: false, vertical: true) }
+            if !object.aliases.isEmpty { detail("Also known as", text: object.aliases.joined(separator: ", ")) }
+            ForEach(object.details) { field in detail(field.title, text: field.text) }
+            if object.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && object.details.isEmpty {
+                Text("No details yet. Open the profile to add them.").foregroundStyle(.secondary)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
     }
     private func detail(_ title: String, text: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {

@@ -147,10 +147,12 @@ final class ManuscriptTextView: NSTextView {
     var grammarSession: InlineGrammarSession?
     var tagSession: ObjectTagSession?
     var objectNames: ObjectNameSession?
+    var selectionActions: SelectionQuickActionSession?
     var usesManuscriptMargins = true
     var onFocus: (() -> Void)?
     var onBlur: (() -> Void)?
     override func menu(for event: NSEvent) -> NSMenu? {
+        selectionActions?.close()
         tagSession?.close(); objectNames?.close()
         window?.makeFirstResponder(self)
         let selection = selectedRange()
@@ -174,6 +176,20 @@ final class ManuscriptTextView: NSTextView {
         if result { onBlur?() }
         return result
     }
+    @discardableResult func replaceAttributedText(_ replacement: NSAttributedString, range: NSRange) -> Bool {
+        guard let storage = textStorage, range.location >= 0, NSMaxRange(range) <= storage.length,
+              shouldChangeText(in: range, replacementString: replacement.string) else { return false }
+        // NSTextView.insertText can extend a partially selected link across
+        // the whole replacement. Write the prepared attributes exactly.
+        storage.replaceCharacters(in: range, with: replacement)
+        setSelectedRange(NSRange(location: range.location + replacement.length, length: 0))
+        var typing = typingAttributes
+        if ProjectTagReference.from(typing[.link]) != nil { typing.removeValue(forKey: .link) }
+        typingAttributes = typing
+        didChangeText()
+        return true
+    }
+
     private var tagBoundaryEdit: (range: NSRange, reference: ProjectTagReference)?
     override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
         tagBoundaryEdit = nil
@@ -188,6 +204,8 @@ final class ManuscriptTextView: NSTextView {
         return allowed
     }
     override func didChangeText() {
+        selectionActions?.close()
+        tagSession?.closeDetails()
         if let edit = tagBoundaryEdit, let storage = textStorage, NSMaxRange(edit.range) <= storage.length {
             var ranges: [NSRange] = []
             storage.enumerateAttribute(.link, in: edit.range) { value, range, _ in
@@ -200,6 +218,7 @@ final class ManuscriptTextView: NSTextView {
         super.didChangeText()
     }
     override func mouseDown(with event: NSEvent) {
+        selectionActions?.close()
         let point = convert(event.locationInWindow, from: nil)
         tagSession?.close()
         objectNames?.close()
@@ -207,14 +226,17 @@ final class ManuscriptTextView: NSTextView {
         if let session = objectNames, let candidate = session.candidate(at: point) { session.show(candidate); return }
         if !event.modifierFlags.contains(.option), event.clickCount == 1, let session = tagSession, session.showDetails(at: point) { return }
         super.mouseDown(with: event)
+        selectionActions?.selectionChanged()
     }
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53, selectionActions?.visible == true { selectionActions?.close(); return }
+        selectionActions?.close()
         if tagSession?.handleKey(event) == true { return }
         tagSession?.closeDetails()
         super.keyDown(with: event)
     }
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil { tagSession?.close(); objectNames?.cancel() }
+        if newWindow == nil { selectionActions?.close(); tagSession?.close(); objectNames?.cancel() }
         super.viewWillMove(toWindow: newWindow)
     }
     @objc func toggleBoldface(_ sender: Any?) { toggleTrait(.boldFontMask) }
@@ -301,6 +323,7 @@ struct RichTextEditor: NSViewRepresentable {
         controller.textView = view; controller.chapterID = chapter.id
         DispatchQueue.main.async { controller.grammar = grammar; controller.tags = tags; controller.objectNames = names }
         scroll.documentView = view
+        view.selectionActions = SelectionQuickActionSession(view: view)
         view.setSelectedRange(NSRange(location: 0, length: 0))
         // The representable starts at zero size. Position the new chapter after
         // SwiftUI has sized the paper, rather than inheriting the clip's bottom edge.
@@ -328,6 +351,7 @@ struct RichTextEditor: NSViewRepresentable {
         controller.textView = view; controller.chapterID = chapter.id
         if context.coordinator.lastData != chapter.richText {
             let selected = view.selectedRange()
+            (view as? ManuscriptTextView)?.selectionActions?.close()
             (view as? ManuscriptTextView)?.tagSession?.close()
             view.textStorage?.setAttributedString(chapter.attributedText)
             view.setSelectedRange(NSRange(location: min(selected.location, view.string.utf16.count), length: 0))
@@ -337,6 +361,7 @@ struct RichTextEditor: NSViewRepresentable {
             (view as? ManuscriptTextView)?.objectNames?.textChanged()
             (view as? ManuscriptTextView)?.pencilComments?.invalidate()
         }
+        (view as? ManuscriptTextView)?.selectionActions?.refreshContent()
         (view as? ManuscriptTextView)?.pencilComments?.update(chapter.comments ?? [], enabled: showPencilComments, change: { changeComment(chapter.id, $0, $1) })
         if let id = controller.pendingCommentFocus {
             DispatchQueue.main.async {
@@ -393,6 +418,7 @@ struct RichTextEditor: NSViewRepresentable {
         }
         func textViewDidChangeSelection(_ notification: Notification) {
             parent.controller.refresh()
+            (notification.object as? ManuscriptTextView)?.selectionActions?.selectionChanged()
             if let view = notification.object as? ManuscriptTextView, view.tagSession?.visible == true { view.tagSession?.refreshSuggestions() }
         }
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {

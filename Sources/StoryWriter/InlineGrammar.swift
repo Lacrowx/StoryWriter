@@ -129,11 +129,49 @@ enum GrammarText {
             if case .insert(let offset, let character, _) = change {
                 let current = Array(result.string)
                 let location = current.prefix(offset).reduce(0) { $0 + String($1).utf16.count }
-                let attributes = result.length > 0 ? result.attributes(at: min(location, result.length - 1), effectiveRange: nil) : source.length > 0 ? source.attributes(at: 0, effectiveRange: nil) : WritingStyle.attributes
+                var attributes = result.length > 0 ? result.attributes(at: min(location, result.length - 1), effectiveRange: nil) : source.length > 0 ? source.attributes(at: 0, effectiveRange: nil) : WritingStyle.attributes
+                // A project link identifies specific words, not a style that
+                // new prose may inherit from its nearest neighbour.
+                if ProjectTagReference.from(attributes[.link]) != nil { attributes.removeValue(forKey: .link) }
                 result.insert(NSAttributedString(string: String(character), attributes: attributes), at: location)
             }
         }
+        restoreProjectTags(from: source, to: result)
         return result
+    }
+
+    private static func restoreProjectTags(from source: NSAttributedString, to result: NSMutableAttributedString) {
+        var restored: [(NSRange, Any)] = []
+        let original = source.string as NSString, revised = result.string as NSString
+        source.enumerateAttribute(.link, in: NSRange(location: 0, length: source.length)) { value, range, _ in
+            guard let reference = ProjectTagReference.from(value), let value else { return }
+            let label = original.substring(with: range)
+            var search = NSRange(location: 0, length: revised.length)
+            var matches: [NSRange] = []
+            while search.length > 0 {
+                let found = revised.range(of: label, options: [], range: search)
+                guard found.location != NSNotFound else { break }
+                matches.append(found)
+                search = NSRange(location: NSMaxRange(found), length: revised.length - NSMaxRange(found))
+            }
+            // Surviving runs disambiguate repeated mentions. If a rewrite moves
+            // the whole label, restore it only when both texts identify it uniquely.
+            for match in matches {
+                var survived = true
+                result.enumerateAttribute(.link, in: match) { current, _, _ in
+                    if ProjectTagReference.from(current) != reference { survived = false }
+                }
+                if survived || (matches.count == 1 && source.string.components(separatedBy: label).count == 2) {
+                    restored.append((match, value))
+                }
+            }
+        }
+        var oldRuns: [NSRange] = []
+        result.enumerateAttribute(.link, in: NSRange(location: 0, length: result.length)) { value, range, _ in
+            if ProjectTagReference.from(value) != nil { oldRuns.append(range) }
+        }
+        for range in oldRuns { result.removeAttribute(.link, range: range) }
+        for (range, value) in restored { result.addAttribute(.link, value: value, range: range) }
     }
 }
 
@@ -225,6 +263,7 @@ final class InlineGrammarSession: NSObject, ObservableObject {
     private var task: Task<Void, Never>?
     private var applying = false
     private var popover: NSPopover?
+    var popoverVisible: Bool { popover?.isShown == true }
     private var continuationTask: Task<Void, Never>?
     private var cacheObserver: NSObjectProtocol?
     let documentKey: String
@@ -342,7 +381,7 @@ final class InlineGrammarSession: NSObject, ObservableObject {
             let original = storage.attributedSubstring(from: correction.range)
             let replacement = GrammarText.replacement(original, with: correction.issue.replacement)
             corrections.removeAll { $0.id == correction.id }
-            view.insertText(replacement, replacementRange: correction.range)
+        view.replaceAttributedText(replacement, range: correction.range)
             textChanged(automatic: false)
         }
         view.undoManager?.endUndoGrouping(); view.undoManager?.setActionName(accepted.count == 1 ? "Grammar correction" : "Grammar corrections")
@@ -389,6 +428,7 @@ final class InlineGrammarSession: NSObject, ObservableObject {
     }
 
     func show(_ correction: LocatedCorrection) {
+        view?.selectionActions?.close()
         continuationTask?.cancel()
         guard let view else { return }
         popover?.close()

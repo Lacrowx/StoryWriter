@@ -201,6 +201,88 @@ final class InlineGrammarTests: XCTestCase {
         XCTAssertEqual(GrammarText.replacement(NSAttributedString(string: ""), with: "🌊 Hi").string, "🌊 Hi")
     }
 
+    @MainActor func testProofreadingKeepsColeSkorpTagOnTheNameOnly() throws {
+        let reference = ProjectTagReference(kind: .character, objectID: UUID())
+        let examples = [
+            ("Cole Skorp geht durch ein große Eingangstor.", "Cole Skorp geht durch ein großes Eingangstor."),
+            ("Cole Skorp war das eine Wunder.", "Für Cole Skorp war das ein Wunder."),
+            ("Cole Skorp stand vor dem große Eingangstor.", "Vor dem großen Eingangstor stand Cole Skorp."),
+            ("🌊 Cole Skorp geht nun endlich auf die Akademie Atorus.", "🌊 Cole Skorp kann nun endlich die Akademie Atorus besuchen.")
+        ]
+        for (original, revision) in examples {
+            let text = NSMutableAttributedString(string: original, attributes: WritingStyle.attributes)
+            text.addAttribute(.link, value: reference.url, range: (original as NSString).range(of: "Cole Skorp"))
+            let corrected = GrammarText.replacement(text, with: revision)
+            XCTAssertEqual(corrected.string, revision)
+            var labels: [String] = []
+            corrected.enumerateAttribute(.link, in: NSRange(location: 0, length: corrected.length)) { value, range, _ in
+                if ProjectTagReference.from(value) == reference { labels.append((corrected.string as NSString).substring(with: range)) }
+            }
+            XCTAssertEqual(labels, ["Cole Skorp"], "Tag expanded during: \(original) → \(revision)")
+        }
+    }
+
+    @MainActor func testProofreadingDoesNotRetagRepeatedNamesOrKeepDeletedTags() {
+        let reference = ProjectTagReference(kind: .character, objectID: UUID())
+        let original = "Cole Skorp geht. Cole Skorp wartet."
+        let text = NSMutableAttributedString(string: original, attributes: WritingStyle.attributes)
+        text.addAttribute(.link, value: reference.url, range: (original as NSString).range(of: "Cole Skorp"))
+        let corrected = GrammarText.replacement(text, with: "Für Cole Skorp geht es weiter. Cole Skorp wartet.")
+        let first = (corrected.string as NSString).range(of: "Cole Skorp")
+        let second = (corrected.string as NSString).range(of: "Cole Skorp", options: .backwards)
+        var range = NSRange()
+        XCTAssertEqual(ProjectTagReference.from(corrected.attribute(.link, at: first.location, longestEffectiveRange: &range, in: NSRange(location: 0, length: corrected.length))), reference)
+        XCTAssertEqual(range, first)
+        XCTAssertNil(corrected.attribute(.link, at: second.location, effectiveRange: nil))
+        let deleted = GrammarText.replacement(text, with: "Er geht weiter.")
+        deleted.enumerateAttribute(.link, in: NSRange(location: 0, length: deleted.length)) { value, _, _ in
+            XCTAssertNil(ProjectTagReference.from(value))
+        }
+        let world = ProjectTagReference(kind: .world, objectID: UUID())
+        let both = NSMutableAttributedString(string: "🌊 Cole Skorp geht zur Akademie Atorus.", attributes: WritingStyle.attributes)
+        for (label, tag) in [("Cole Skorp", reference), ("Akademie Atorus", world)] {
+            both.addAttribute(.link, value: tag.url, range: (both.string as NSString).range(of: label))
+        }
+        let revised = GrammarText.replacement(both, with: "🌊 Zur Akademie Atorus geht Cole Skorp.")
+        for (label, tag) in [("Cole Skorp", reference), ("Akademie Atorus", world)] {
+            let expected = (revised.string as NSString).range(of: label)
+            XCTAssertEqual(ProjectTagReference.from(revised.attribute(.link, at: expected.location, longestEffectiveRange: &range, in: NSRange(location: 0, length: revised.length))), tag)
+            XCTAssertEqual(range, expected)
+        }
+    }
+
+    @MainActor func testAcceptingSentenceCorrectionPreservesTagAndUndo() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        let view = ManuscriptTextView(frame: window.contentView!.bounds)
+        view.isRichText = true; view.allowsUndo = true
+        window.contentView?.addSubview(view); window.makeFirstResponder(view)
+        let reference = ProjectTagReference(kind: .character, objectID: UUID())
+        let original = "Cole Skorp war das eine Wunder."
+        let text = NSMutableAttributedString(string: original, attributes: WritingStyle.attributes)
+        text.addAttribute(.link, value: reference.url, range: (original as NSString).range(of: "Cole Skorp"))
+        view.textStorage?.setAttributedString(text)
+        let session = InlineGrammarSession(view: view); view.grammarSession = session
+        let revision = "Für Cole Skorp war das ein Wunder."
+        session.corrections = GrammarText.locate([GrammarIssue(original: original, replacement: revision, kind: .grammar)], chunk: original, offset: 0)
+        session.accept(.document)
+        XCTAssertEqual(view.string, revision)
+        var range = NSRange()
+        let name = (revision as NSString).range(of: "Cole Skorp")
+        XCTAssertEqual(ProjectTagReference.from(view.textStorage?.attribute(.link, at: name.location, longestEffectiveRange: &range, in: NSRange(location: 0, length: view.string.utf16.count))), reference)
+        XCTAssertEqual(range, name)
+        XCTAssertNil(view.textStorage?.attribute(.link, at: 0, effectiveRange: nil))
+        XCTAssertNil(view.textStorage?.attribute(.link, at: NSMaxRange(name), effectiveRange: nil))
+        view.undoManager?.undo()
+        XCTAssertEqual(view.string, original)
+        XCTAssertEqual(ProjectTagReference.from(view.textStorage?.attribute(.link, at: 0, effectiveRange: nil)), reference)
+        view.undoManager?.redo()
+        XCTAssertEqual(view.string, revision)
+        XCTAssertNil(view.textStorage?.attribute(.link, at: 0, effectiveRange: nil))
+        session.cancel()
+    }
+
     @MainActor func testParagraphAcceptanceIsOneUndoAndMarksNeverEnterSavedText() async throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
