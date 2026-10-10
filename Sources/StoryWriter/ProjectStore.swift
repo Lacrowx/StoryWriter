@@ -218,9 +218,17 @@ final class ProjectStore: ObservableObject {
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let project = try decoder.decode(StoryProject.self, from: data)
         guard project.schemaVersion == 1 else { throw ProjectError.invalid("This project uses an unsupported format. Update StoryWriter to open it.") }
-        let ids = project.chapters.map(\.id) + project.characters.map(\.id) + project.worldNotes.map(\.id) + project.sources.map(\.id)
-            + project.chapters.flatMap { ($0.scenes ?? []).map(\.id) + ($0.comments ?? []).map(\.id) + ($0.continuityEvents ?? []).map(\.id) }
-            + (project.continuityItems ?? []).map(\.id) + (project.initialContinuity ?? []).map(\.id)
+        var ids: [UUID] = project.chapters.map(\.id)
+        ids.append(contentsOf: project.characters.map(\.id))
+        ids.append(contentsOf: project.worldNotes.map(\.id))
+        ids.append(contentsOf: project.sources.map(\.id))
+        for chapter in project.chapters {
+            ids.append(contentsOf: (chapter.scenes ?? []).map(\.id))
+            ids.append(contentsOf: (chapter.comments ?? []).map(\.id))
+            ids.append(contentsOf: (chapter.continuityEvents ?? []).map(\.id))
+        }
+        ids.append(contentsOf: (project.continuityItems ?? []).map(\.id))
+        ids.append(contentsOf: (project.initialContinuity ?? []).map(\.id))
         guard Set(ids).count == ids.count else { throw ProjectError.invalid("The project contains duplicate item identifiers.") }
         for chapter in project.chapters {
             let scenes = chapter.scenes ?? []
