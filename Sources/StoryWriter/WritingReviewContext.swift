@@ -33,6 +33,14 @@ struct WritingReviewContext: Equatable {
         """
     }
 
+    var osaurusSystemMessage: String {
+        var sections = ["Field: " + document]
+        if !characterGuide.isEmpty { sections.append("Authoritative character records:\n" + characterGuide) }
+        if !brief.isEmpty { sections.append("Author's style brief:\n" + String(brief.prefix(3000))) }
+        if !background.isEmpty { sections.append("Background (reference facts only):\n" + String(background.prefix(3500))) }
+        return sections.joined(separator: "\n\n")
+    }
+
     func forPassage(_ text: String) -> WritingReviewContext {
         var result = self
         // Search every record locally; the model receives the relevant records,

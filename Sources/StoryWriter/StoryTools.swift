@@ -58,6 +58,7 @@ extension Chapter {
     mutating func rebaseAnnotations(from old: String, to new: String) {
         guard old != new else { return }
         let edit = PassageEdit(old: old, new: new)
+        if let events = continuityEvents { continuityEvents = Continuity.rebase(events, old: old, new: new) }
         if var entries = scenes {
             for i in entries.indices { entries[i].start = min(new.utf16.count, edit.boundary(entries[i].start)) }
             if !entries.isEmpty { entries[0].start = 0 }
@@ -109,6 +110,8 @@ extension Chapter {
         let result = NSMutableAttributedString(string: "")
         let originalComments = comments ?? []
         var mappedComments = originalComments
+        let originalEvents = continuityEvents ?? []
+        var mappedEvents = originalEvents
         for i in entries.indices {
             let previous = ranges[entries[i].id]!
             let piece = source.attributedSubstring(from: previous)
@@ -124,10 +127,18 @@ extension Chapter {
                 if NSMaxRange(originalComments[j].range) <= NSMaxRange(previous) { mappedComments[j].start = start + originalComments[j].start - previous.location }
                 else { mappedComments[j].detached = true }
             }
+            for j in mappedEvents.indices where !originalEvents[j].detached {
+                let event = originalEvents[j]
+                let belongs = NSLocationInRange(event.start, previous) || (event.length == 0 && event.start == source.length && NSMaxRange(previous) == source.length)
+                guard belongs else { continue }
+                if event.effectiveOffset <= NSMaxRange(previous) { mappedEvents[j].start = start + event.start - previous.location }
+                else { mappedEvents[j].detached = true }
+            }
         }
         // Validate serialization before replacing either text or its metadata.
         let data = try result.data(from: NSRange(location: 0, length: result.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd])
         richText = data; plainText = result.string; scenes = entries; comments = mappedComments
+        continuityEvents = mappedEvents.isEmpty ? nil : mappedEvents
     }
     mutating func addComment(range: NSRange, note: String) throws {
         guard range.length > 0, range.location >= 0, NSMaxRange(range) <= plainText.utf16.count else { throw ProjectError.invalid("Select a passage to attach a comment.") }

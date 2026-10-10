@@ -21,6 +21,12 @@ struct ProjectTagReference: Hashable, Identifiable {
     }
 }
 
+struct TaggedObjectDetail: Equatable, Identifiable {
+    var title: String
+    var text: String
+    var id: String { title }
+}
+
 struct TaggedProjectObject: Identifiable, Equatable {
     var reference: ProjectTagReference
     var title: String
@@ -28,12 +34,25 @@ struct TaggedProjectObject: Identifiable, Equatable {
     var symbol: String
     var summary: String
     var aliases: [String] = []
+    var kindLabel: String = ""
+    var details: [TaggedObjectDetail] = []
     var id: String { reference.id }
 }
 
 extension StoryProject {
     var tagObjects: [TaggedProjectObject] {
-        characters.map { TaggedProjectObject(reference: ProjectTagReference(kind: .character, objectID: $0.id), title: $0.name, group: "Characters", symbol: "person", summary: $0.role, aliases: ($0.aliases ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }) }
+        characters.map { character in
+            TaggedProjectObject(reference: ProjectTagReference(kind: .character, objectID: character.id), title: character.name, group: "Characters", symbol: "person", summary: character.role, aliases: (character.aliases ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }, kindLabel: "Character", details: [
+                TaggedObjectDetail(title: "Pronouns", text: character.pronouns),
+                TaggedObjectDetail(title: "Appearance", text: character.appearance),
+                TaggedObjectDetail(title: "Personality & voice", text: character.personality),
+                TaggedObjectDetail(title: "Motivation", text: character.motivation),
+                TaggedObjectDetail(title: "Conflict", text: character.conflict),
+                TaggedObjectDetail(title: "Character arc", text: character.arc),
+                TaggedObjectDetail(title: "Relationships", text: character.relationships),
+                TaggedObjectDetail(title: "Notes", text: character.notes)
+            ].filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        }
         + worldNotes.map { note in
             let group: String
             switch note.category {
@@ -44,7 +63,10 @@ extension StoryProject {
             case .rules: group = "Rules & systems"
             case .other: group = "Other world entries"
             }
-            return TaggedProjectObject(reference: ProjectTagReference(kind: .world, objectID: note.id), title: note.title, group: group, symbol: note.category.symbol, summary: note.summary, aliases: (note.aliases ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+            return TaggedProjectObject(reference: ProjectTagReference(kind: .world, objectID: note.id), title: note.title, group: group, symbol: note.category.symbol, summary: note.summary, aliases: (note.aliases ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }, kindLabel: note.category == .object ? "Item" : note.category.rawValue, details: [
+                TaggedObjectDetail(title: "Details", text: note.details),
+                TaggedObjectDetail(title: "Connections", text: note.connections)
+            ].filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         }
     }
 }
@@ -95,7 +117,13 @@ extension EnvironmentValues {
 @MainActor
 final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
     weak var view: ManuscriptTextView?
-    var objects: [TaggedProjectObject] = []
+    var objects: [TaggedProjectObject] = [] {
+        didSet {
+            guard objects != oldValue, let reference = inspectedReference,
+                  let controller = detailsPopup?.contentViewController as? NSHostingController<ObjectTagDetailsBubble> else { return }
+            controller.rootView = detailsBubble(for: reference)
+        }
+    }
     var open: (ProjectTagReference) -> Void = { _ in }
     var create: (String, NewObjectKind) -> ProjectTagReference? = { _, _ in nil }
     var ignoreName: (String) -> Void = { _ in }
@@ -104,12 +132,60 @@ final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
     @Published var newName: String?
     private var popup: NSPopover?
     private var queryRange: NSRange?
+    private var detailsPopup: NSPopover?
+    private var scrollObserver: NSObjectProtocol?
+    private(set) var inspectedReference: ProjectTagReference?
+    private(set) var detailsAnchor: NSRect?
+    var detailsVisible: Bool { detailsPopup?.isShown == true }
     private(set) var inserting = false
     var visible: Bool { popup?.isShown == true }
     init(view: ManuscriptTextView) { self.view = view; super.init() }
 
-    func close() { popup?.close(); popup = nil; queryRange = nil }
-    func popoverDidClose(_ notification: Notification) { popup = nil; queryRange = nil }
+    func close() { popup?.close(); popup = nil; queryRange = nil; closeDetails() }
+    func closeDetails() {
+        detailsPopup?.close(); detailsPopup = nil; inspectedReference = nil; detailsAnchor = nil
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+        scrollObserver = nil
+    }
+    func popoverDidClose(_ notification: Notification) {
+        if let closed = notification.object as? NSPopover, closed === detailsPopup { closeDetails() }
+        else if let closed = notification.object as? NSPopover, closed === popup { popup = nil; queryRange = nil }
+    }
+    private func detailsBubble(for reference: ProjectTagReference) -> ObjectTagDetailsBubble {
+        ObjectTagDetailsBubble(object: objects.first { $0.reference == reference }, close: { [weak self] in self?.closeDetails() }, open: { [weak self] in
+            self?.closeDetails(); self?.open(reference)
+        })
+    }
+    @discardableResult func showDetails(at point: NSPoint) -> Bool {
+        guard let index = taggedCharacter(at: point) else { return false }
+        return showDetails(atCharacter: index)
+    }
+    @discardableResult func showDetails(atCharacter index: Int) -> Bool {
+        guard let view, view.window?.isVisible == true, let storage = view.textStorage,
+              index >= 0, index < storage.length, let manager = view.layoutManager, let container = view.textContainer else { return false }
+        var range = NSRange()
+        guard let reference = ProjectTagReference.from(storage.attribute(.link, at: index, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length))) else { return false }
+        close()
+        manager.ensureLayout(for: container)
+        // Anchor to the clicked line when a tagged phrase wraps across lines.
+        let glyph = manager.glyphIndexForCharacter(at: index)
+        var line = NSRange()
+        _ = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &line)
+        let glyphs = NSIntersectionRange(line, manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil))
+        let bounds = manager.boundingRect(forGlyphRange: glyphs, in: container)
+        let rect = bounds.offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
+        let details = NSPopover(); details.behavior = .transient; details.animates = false; details.delegate = self
+        details.contentViewController = NSHostingController(rootView: detailsBubble(for: reference))
+        detailsPopup = details; inspectedReference = reference; detailsAnchor = rect
+        if let clip = view.enclosingScrollView?.contentView {
+            clip.postsBoundsChangedNotifications = true
+            scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.closeDetails() }
+            }
+        }
+        details.show(relativeTo: rect, of: view, preferredEdge: .maxY)
+        return true
+    }
     func refreshSuggestions() {
         guard !inserting, let view, let range = ObjectTags.queryRange(in: view.string, selection: view.selectedRange()) else { close(); return }
         queryRange = range
@@ -194,14 +270,20 @@ final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
         inserting = false; newName = nil; ignoreName(name)
     }
     func reference(at point: NSPoint) -> ProjectTagReference? {
+        guard let index = taggedCharacter(at: point) else { return nil }
+        return ProjectTagReference.from(view?.textStorage?.attribute(.link, at: index, effectiveRange: nil))
+    }
+    private func taggedCharacter(at point: NSPoint) -> Int? {
         guard let view, let manager = view.layoutManager, let container = view.textContainer else { return nil }
         let local = NSPoint(x: point.x - view.textContainerOrigin.x, y: point.y - view.textContainerOrigin.y)
+        manager.ensureLayout(for: container)
         let glyph = manager.glyphIndex(for: local, in: container)
         guard glyph < manager.numberOfGlyphs else { return nil }
         let rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
         guard rect.insetBy(dx: -2, dy: -2).contains(local) else { return nil }
         let index = manager.characterIndexForGlyph(at: glyph)
-        return ProjectTagReference.from(view.textStorage?.attribute(.link, at: index, effectiveRange: nil))
+        guard index < (view.textStorage?.length ?? 0), ProjectTagReference.from(view.textStorage?.attribute(.link, at: index, effectiveRange: nil)) != nil else { return nil }
+        return index
     }
     func removeSelectedTag() {
         guard let view, let storage = view.textStorage, storage.length > 0 else { return }
@@ -260,6 +342,49 @@ private struct ObjectTagSuggestions: View {
                     .onChange(of: session.highlighted) { _, value in if session.suggestions.indices.contains(value) { proxy.scrollTo(session.suggestions[value].id) } }
             } }
         }.padding(16).frame(width: 340).tint(AppTheme.accent)
+    }
+}
+
+private struct ObjectTagDetailsBubble: View {
+    var object: TaggedProjectObject?
+    var close: () -> Void
+    var open: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: object?.symbol ?? "tag.slash").font(.title2).foregroundStyle(AppTheme.accent)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(object?.title ?? "Missing object").font(.title3).fontWeight(.semibold).fixedSize(horizontal: false, vertical: true)
+                    Text(object.map { $0.kindLabel.isEmpty ? $0.group : $0.kindLabel } ?? "Disconnected tag").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button(action: close) { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close details · Escape").keyboardShortcut(.cancelAction)
+            }
+            if let object {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if !object.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Text(object.summary).fixedSize(horizontal: false, vertical: true) }
+                        if !object.aliases.isEmpty { detail("Also known as", text: object.aliases.joined(separator: ", ")) }
+                        ForEach(object.details) { field in detail(field.title, text: field.text) }
+                        if object.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && object.details.isEmpty {
+                            Text("No details yet. Open the profile to add them.").foregroundStyle(.secondary)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                }.frame(maxHeight: 300)
+                Divider()
+                Button(action: open) { Label("Open full profile", systemImage: "sidebar.right").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).foregroundStyle(AppTheme.accent)
+            } else {
+                Text("This object is no longer in the project.")
+                Text("Your words are preserved. Use Remove tag from selection to unlink them.").font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Option-click tagged words to edit the text.").font(.caption2).foregroundStyle(.secondary)
+        }.padding(18).frame(width: 340).tint(AppTheme.accent)
+    }
+    private func detail(_ title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).fontWeight(.semibold).foregroundStyle(.secondary)
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

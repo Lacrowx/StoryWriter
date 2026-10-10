@@ -164,6 +164,7 @@ final class LocalGrammarService: ObservableObject {
     var selectedModel: LocalModel? { models.first { $0.id == modelID } }
     var chunkLimit: Int { backend == .apple ? 1200 : 4000 }
     private var connectionTask: Task<Void, Never>?
+    private var requestCache = WritingReviewRequestCache()
     var cachedResults: [String: CachedGrammarResult] = [:]
 
     init() {
@@ -197,7 +198,14 @@ final class LocalGrammarService: ObservableObject {
         if selectedBackend == .apple { return try await AppleWritingModel.review(text, language: actualLanguage, context: context, includeStyle: style) }
         await ensureConnection()
         guard let model = selectedModel else { throw ProjectError.invalid(message ?? "Choose a local model in the proofreading panel.") }
-        return try await OsaurusClient(baseURL: baseURL).review(text: text, language: actualLanguage, model: model, context: context, includeStyle: style)
+        try Task.checkCancellation()
+        let endpoint = baseURL
+        let key = WritingReviewRequestCache.Key(text: text, language: actualLanguage, model: model, baseURL: endpoint, includeStyle: style, context: context)
+        if let cached = requestCache.result(for: key) { return cached }
+        let issues = try await OsaurusClient(baseURL: endpoint).review(text: text, language: actualLanguage, model: model, context: context, includeStyle: style)
+        try Task.checkCancellation()
+        requestCache.store(issues, for: key)
+        return issues
     }
     func publishResult(_ result: CachedGrammarResult, key: String) {
         cachedResults[key] = result
@@ -407,7 +415,7 @@ struct InlineCorrectionCard: View {
             Label("\(correction.issue.category.label) suggestion", systemImage: "text.badge.checkmark").font(.headline).foregroundStyle(correction.issue.category.color)
             Text(correction.issue.original).strikethrough().foregroundStyle(.secondary)
             Text(correction.issue.replacement).foregroundStyle(AppTheme.accent)
-            Text(correction.issue.explanation).font(.caption).foregroundStyle(.secondary)
+            if !correction.issue.explanation.isEmpty { Text(correction.issue.explanation).font(.caption).foregroundStyle(.secondary) }
             HStack {
                 Button("Accept") { session.accept(correction.id) }.buttonStyle(.borderedProminent)
                 Button("Dismiss") { session.dismiss(correction.id) }

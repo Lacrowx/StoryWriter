@@ -43,6 +43,7 @@ struct ProjectWorkspace: View {
     @State private var panelTab: WritingPanelTab = .research
     @State private var pinned: PinnedResearch?
     @State private var destination: StoryDestination?
+    @State private var continuityRequest: ContinuityRequest?
     @AppStorage("readingWidth") private var readingWidth = ReadingWidth.medium.rawValue
     @AppStorage("readingZoom") private var readingZoom = 1.0
     @AppStorage("dimPaper") private var dimPaper = false
@@ -71,6 +72,7 @@ struct ProjectWorkspace: View {
                             if project.kind == .story {
                                 Button("Story timeline…") { showTimeline = true }
                                 Button("Revision comments") { section = .manuscript; showPanel = true; panelTab = .comments }
+                                Button("Character continuity") { section = .manuscript; showProofreader = false; showPanel = true; panelTab = .continuity }
                             }
                             Divider()
                             Button("Choose automatic backup folder…") { store.chooseBackupFolder(projectID) }
@@ -148,6 +150,7 @@ struct ProjectWorkspace: View {
             })
             .sheet(isPresented: $showSearch) { ProjectSearchSheet(projectID: projectID).environment(\.navigateStory, navigate) }
             .sheet(isPresented: $showTimeline) { TimelineSheet(projectID: projectID).environment(\.navigateStory, navigate) }
+            .sheet(item: $continuityRequest) { request in ContinuityRecordSheet(projectID: projectID, request: request) }
             .onChange(of: section) { _, _ in reviewFocus.activate(nil) }
             .onChange(of: panelTab) { _, _ in reviewFocus.activate(nil) }
             .sheet(isPresented: $showExport) { ExportSheet(projectID: projectID, chapterID: chapterID) }
@@ -181,6 +184,7 @@ struct ProjectWorkspace: View {
                 .button("Research beside manuscript", checked: showPanel && panelTab == .research) { section = .manuscript; showPanel = true; panelTab = .research },
                 .button("Plan scenes", checked: showPanel && panelTab == .scenes) { section = .manuscript; showPanel = true; panelTab = .scenes },
                 .button("Revision comments", checked: showPanel && panelTab == .comments) { section = .manuscript; showPanel = true; panelTab = .comments },
+                .button("Character continuity", checked: showPanel && panelTab == .continuity) { section = .manuscript; showProofreader = false; showPanel = true; panelTab = .continuity },
                 .button("Chapter synopsis & status", checked: showChapterNotes) { section = .manuscript; showChapterNotes.toggle() },
                 .button("Proofreader panel", checked: showProofreader) { section = .manuscript; showProofreader.toggle() },
                 .button("Review entire manuscript…") { section = .manuscript; showManuscriptReview = true },
@@ -230,6 +234,7 @@ struct ProjectWorkspace: View {
         guard let chapter = store.project(projectID)?.chapters.first(where: { $0.id == id }), chapter.plainText == expectedText else { return [] }
         return [
             .button("Add comment to selection", enabled: range.length > 0) { addComment(chapterID: id, range: range, expectedText: expectedText) },
+            .submenu("Track a character change", continuityCommands(chapter: chapter, range: range, expectedText: expectedText)),
             .button("Split scene here", enabled: range.location > 0 && range.location < expectedText.utf16.count) {
                 guard var current = store.project(projectID)?.chapters.first(where: { $0.id == id }), current.plainText == expectedText else { return }
                 do {
@@ -247,6 +252,22 @@ struct ProjectWorkspace: View {
                 do { try ExportService.copyForWebsite(current) } catch { store.errorMessage = error.localizedDescription }
             }, .separator
         ]
+    }
+
+    private func continuityCommands(chapter: Chapter, range: NSRange, expectedText: String) -> [ContextCommand] {
+        guard let project = store.project(projectID) else { return [] }
+        let viewpoint = Continuity.viewpoint(in: chapter, offset: range.location)
+        let person = project.characters.first { $0.id == viewpoint } ?? project.characters.first
+        guard let person else { return [.button("Add a character in Characters first", enabled: false) {}] }
+        return [(.knowledge, ContinuityAction.learns, "learns this"), (.possession, .gets, "gets this"), (.task, .assigned, "needs to do this"), (.rule, .applies, "must follow this")].map { category, action, phrase in
+            .button("\(person.name) \(phrase)…") {
+                continuityRequest = ContinuityRequest(chapterID: chapter.id, range: range, expectedText: expectedText, characterID: person.id, category: category, action: action)
+                showProofreader = false; showPanel = true; panelTab = .continuity
+            }
+        } + [.separator, .button("Choose another character…") {
+            continuityRequest = ContinuityRequest(chapterID: chapter.id, range: range, expectedText: expectedText)
+            showProofreader = false; showPanel = true; panelTab = .continuity
+        }]
     }
 
     private func addComment(chapterID: UUID, range: NSRange, expectedText: String) {
@@ -274,7 +295,7 @@ struct ProjectWorkspace: View {
     @ViewBuilder private func manuscript(_ project: StoryProject) -> some View {
         GeometryReader { workspaceGeometry in
         HStack(spacing: 0) {
-            if !focusMode && !showProofreader && (!showPanel || workspaceGeometry.size.width >= 1060) {
+            if !focusMode && !showProofreader && (!showPanel || workspaceGeometry.size.width >= 1090) {
                 ChapterOutline(projectID: projectID, selection: $chapterID, onNavigate: navigate).frame(width: 215)
                     .clipShape(RoundedRectangle(cornerRadius: 20))
                     .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.primary.opacity(0.06)))
@@ -286,7 +307,7 @@ struct ProjectWorkspace: View {
                         WritingTextArea(text: store.itemBinding(projectID, \.chapters, id: chapter.id, fallback: chapter).title, height: 28, label: "chapter title", fontSize: 17, compact: true, chrome: true).environment(\.grammarNamespace, chapter.id.uuidString)
                         Spacer(minLength: 0)
                         HStack(spacing: 16) {
-                        Button { showPanel.toggle() } label: { Image(systemName: "sidebar.right").foregroundStyle(showPanel ? Color.accentColor : .primary) }.help("Research, scenes, and passage comments")
+                        Button { showProofreader = false; showPanel.toggle() } label: { Image(systemName: "sidebar.right").foregroundStyle(showPanel ? Color.accentColor : .primary) }.help("Research, scenes, passage comments, and character continuity")
                         Menu {
                             Button("Add comment to selection") { if let view = editor.textView { addComment(chapterID: chapter.id, range: view.selectedRange(), expectedText: view.string) } }.disabled(editor.selectionText.isEmpty)
                             Button("Show revision comments") { showPanel = true; panelTab = .comments }
@@ -411,7 +432,7 @@ struct ChapterOutline: View {
                                 Divider()
                                 Button("Move up") { move(chapter.id, offset: -1) }.disabled(index == 0)
                                 Button("Move down") { move(chapter.id, offset: 1) }.disabled(index == project.chapters.count - 1)
-                                Button("Duplicate chapter") { var copy = chapter; copy.id = UUID(); copy.title += " (copy)"; if var scenes = copy.scenes { for i in scenes.indices { scenes[i].id = UUID() }; copy.scenes = scenes }; if var comments = copy.comments { for i in comments.indices { comments[i].id = UUID() }; copy.comments = comments }; store.update(projectID) { $0.chapters.insert(copy, at: index + 1) }; selection = copy.id }
+                                Button("Duplicate chapter") { var copy = chapter; copy.id = UUID(); copy.title += " (copy)"; if var scenes = copy.scenes { for i in scenes.indices { scenes[i].id = UUID() }; copy.scenes = scenes }; if var comments = copy.comments { for i in comments.indices { comments[i].id = UUID() }; copy.comments = comments }; if var events = copy.continuityEvents { for i in events.indices { events[i].id = UUID() }; copy.continuityEvents = events }; store.update(projectID) { $0.chapters.insert(copy, at: index + 1) }; selection = copy.id }
                                 Divider(); Button("Delete chapter…", role: .destructive) { deleteID = chapter.id }
                                 Divider(); AppContextMenuItems()
                             }.moveDisabled(!search.isEmpty)

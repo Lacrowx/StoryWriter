@@ -29,7 +29,7 @@ struct ProjectSearchSheet: View {
 }
 
 enum WritingPanelTab: String, CaseIterable, Identifiable {
-    case research = "Research", scenes = "Scenes", comments = "Notes"
+    case research = "Research", scenes = "Scenes", comments = "Notes", continuity = "Continuity"
     var id: String { rawValue }
 }
 
@@ -50,8 +50,9 @@ struct WritingSidePanel: View {
             case .research: ResearchPanel(projectID: projectID, pinned: $pinned)
             case .scenes: ScenePanel(projectID: projectID, chapterID: chapterID, editor: editor)
             case .comments: CommentQueue(projectID: projectID, editor: editor, initialChapterID: chapterID)
+            case .continuity: ContinuityPanel(projectID: projectID, chapterID: chapterID, editor: editor)
             }
-        }.frame(width: 330).background(DesktopMaterial())
+        }.frame(width: 360).background(DesktopMaterial())
     }
 }
 

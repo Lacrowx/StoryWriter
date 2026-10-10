@@ -138,7 +138,10 @@ final class ManuscriptTextView: NSTextView {
         (super.accessibilityChildren() ?? []) + (pencilComments?.notes ?? [])
     }
     override func draw(_ dirtyRect: NSRect) {
+        // NSTextView leaves a clip to the text column; margin marks need the original clip.
+        NSGraphicsContext.saveGraphicsState()
         super.draw(dirtyRect)
+        NSGraphicsContext.restoreGraphicsState()
         pencilComments?.draw(in: dirtyRect)
     }
     var grammarSession: InlineGrammarSession?
@@ -202,11 +205,12 @@ final class ManuscriptTextView: NSTextView {
         objectNames?.close()
         if let session = grammarSession, let correction = session.correction(at: point) { session.show(correction); return }
         if let session = objectNames, let candidate = session.candidate(at: point) { session.show(candidate); return }
-        if !event.modifierFlags.contains(.option), event.clickCount == 1, let session = tagSession, let reference = session.reference(at: point) { session.open(reference); return }
+        if !event.modifierFlags.contains(.option), event.clickCount == 1, let session = tagSession, session.showDetails(at: point) { return }
         super.mouseDown(with: event)
     }
     override func keyDown(with event: NSEvent) {
         if tagSession?.handleKey(event) == true { return }
+        tagSession?.closeDetails()
         super.keyDown(with: event)
     }
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -324,6 +328,7 @@ struct RichTextEditor: NSViewRepresentable {
         controller.textView = view; controller.chapterID = chapter.id
         if context.coordinator.lastData != chapter.richText {
             let selected = view.selectedRange()
+            (view as? ManuscriptTextView)?.tagSession?.close()
             view.textStorage?.setAttributedString(chapter.attributedText)
             view.setSelectedRange(NSRange(location: min(selected.location, view.string.utf16.count), length: 0))
             view.undoManager?.removeAllActions()
@@ -391,8 +396,9 @@ struct RichTextEditor: NSViewRepresentable {
             if let view = notification.object as? ManuscriptTextView, view.tagSession?.visible == true { view.tagSession?.refreshSuggestions() }
         }
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            guard let reference = ProjectTagReference.from(link) else { return false }
-            (textView as? ManuscriptTextView)?.tagSession?.open(reference); return true
+            guard ProjectTagReference.from(link) != nil else { return false }
+            if NSApp.currentEvent?.modifierFlags.contains(.option) == true { return true }
+            (textView as? ManuscriptTextView)?.tagSession?.showDetails(atCharacter: charIndex); return true
         }
     }
 }

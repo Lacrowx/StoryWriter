@@ -77,4 +77,32 @@ final class PencilCommentTests: XCTestCase {
         comment.ink = .rose
         XCTAssertEqual(try JSONDecoder().decode(PassageComment.self, from: JSONEncoder().encode(comment)).ink, .rose)
     }
+
+    @MainActor func testMarginConnectorIsVisibleOutsideTextContainer() throws {
+        let view = ManuscriptTextView(frame: NSRect(x: 0, y: 0, width: 840, height: 400))
+        view.appearance = NSAppearance(named: .aqua)
+        view.isVerticallyResizable = true; view.isHorizontallyResizable = false
+        view.textStorage?.setAttributedString(NSAttributedString(string: "Ada waits for the ferry.", attributes: WritingStyle.attributes))
+        let layer = PencilCommentLayer(view: view); view.pencilComments = layer
+        var comment = PassageComment(start: 0, length: 3, quote: "Ada", note: "Why is she here?")
+        comment.ink = .rose
+        layer.update([comment], enabled: true, change: { _, _ in })
+        view.layout()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 840, pixelsHigh: 400, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        NSColor.white.setFill(); NSRect(x: 0, y: 0, width: 840, height: 400).fill()
+        let transform = NSAffineTransform(); transform.translateX(by: 0, yBy: 400); transform.scaleX(by: 1, yBy: -1); transform.concat()
+        view.draw(view.bounds)
+        NSGraphicsContext.restoreGraphicsState()
+        let edge = Int(ceil(view.textContainerOrigin.x + view.textContainer!.size.width))
+        let noteEdge = Int(layer.notes[0].frame.minX)
+        var coloredPixels = 0
+        for x in edge..<noteEdge {
+            for y in 0..<400 {
+                if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.redComponent > color.greenComponent + 0.12 { coloredPixels += 1 }
+            }
+        }
+        XCTAssertGreaterThan(coloredPixels, 4, "Pencil connector must remain visible in the margin after drawing the manuscript")
+    }
 }

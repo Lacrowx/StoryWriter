@@ -13,10 +13,20 @@ extension ProjectStore {
         guard saved.id == projectID else { throw ProjectError.invalid("This revision belongs to another project.") }
         return saved
     }
-    func recoverChapter(_ chapter: Chapter, projectID: UUID) throws {
+    func recoverChapter(_ chapter: Chapter, projectID: UUID, continuitySource: StoryProject? = nil) throws {
+        guard var recoveredProject = project(projectID) else { return }
+        // Chapter events need the shared identities from the same revision.
+        func include(_ id: UUID) throws {
+            if (recoveredProject.continuityItems ?? []).contains(where: { $0.id == id }) { return }
+            guard let item = continuitySource?.continuityItems?.first(where: { $0.id == id }) else { throw ProjectError.invalid("Recover this chapter from its saved revision to include its tracked information.") }
+            if let parentID = item.parentID { try include(parentID) }
+            if recoveredProject.continuityItems == nil { recoveredProject.continuityItems = [] }; recoveredProject.continuityItems?.append(item)
+        }
+        for event in chapter.continuityEvents ?? [] { try include(event.itemID) }
         guard saveNow() else { throw ProjectError.invalid("Save your current writing before recovering a chapter.") }
         try checkpoint(projectID)
         update(projectID) { project in
+            project.continuityItems = recoveredProject.continuityItems
             if let index = project.chapters.firstIndex(where: { $0.id == chapter.id }) { project.chapters[index] = chapter }
             else { project.chapters.append(chapter) }
         }
@@ -159,7 +169,7 @@ struct RevisionHistorySheet: View {
     private func recover(_ revisions: [Revision]) {
         do {
             if confirmation == .project, let revision = revisions.first(where: { $0.id == revisionID }) { store.restore(revision, projectID: projectID); if store.errorMessage == nil { dismiss() } }
-            else if let chapter = saved?.chapters.first(where: { $0.id == chapterID }) { try store.recoverChapter(chapter, projectID: projectID); dismiss(); navigate(StoryDestination(kind: .chapter, itemID: chapter.id)) }
+            else if let chapter = saved?.chapters.first(where: { $0.id == chapterID }) { try store.recoverChapter(chapter, projectID: projectID, continuitySource: saved); dismiss(); navigate(StoryDestination(kind: .chapter, itemID: chapter.id)) }
         } catch { loadError = error.localizedDescription }
         confirmation = nil
     }

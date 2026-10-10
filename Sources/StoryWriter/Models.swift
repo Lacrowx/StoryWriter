@@ -22,6 +22,7 @@ struct Chapter: Codable, Identifiable, Equatable {
     var plainText = ""
     var scenes: [StoryScene]?
     var comments: [PassageComment]?
+    var continuityEvents: [ContinuityEvent]?
     var wordCount: Int { plainText.wordCount }
     var attributedText: NSAttributedString {
         (try? NSAttributedString(data: richText, options: [.documentType: NSAttributedString.DocumentType.rtfd], documentAttributes: nil))
@@ -104,6 +105,8 @@ struct StoryProject: Codable, Identifiable, Equatable {
     var publishingNotes = ""
     var writingBrief: String?
     var ignoredObjectNames: [String]?
+    var continuityItems: [ContinuityItem]?
+    var initialContinuity: [ContinuityEvent]?
     var aiWritingBrief: String {
         get { writingBrief ?? "" }
         set { writingBrief = newValue }

@@ -219,7 +219,8 @@ final class ProjectStore: ObservableObject {
         let project = try decoder.decode(StoryProject.self, from: data)
         guard project.schemaVersion == 1 else { throw ProjectError.invalid("This project uses an unsupported format. Update StoryWriter to open it.") }
         let ids = project.chapters.map(\.id) + project.characters.map(\.id) + project.worldNotes.map(\.id) + project.sources.map(\.id)
-            + project.chapters.flatMap { ($0.scenes ?? []).map(\.id) + ($0.comments ?? []).map(\.id) }
+            + project.chapters.flatMap { ($0.scenes ?? []).map(\.id) + ($0.comments ?? []).map(\.id) + ($0.continuityEvents ?? []).map(\.id) }
+            + (project.continuityItems ?? []).map(\.id) + (project.initialContinuity ?? []).map(\.id)
         guard Set(ids).count == ids.count else { throw ProjectError.invalid("The project contains duplicate item identifiers.") }
         for chapter in project.chapters {
             let scenes = chapter.scenes ?? []
@@ -227,6 +228,22 @@ final class ProjectStore: ObservableObject {
             for comment in chapter.comments ?? [] {
                 guard comment.start >= 0, comment.length > 0, comment.detached || (comment.start <= chapter.plainText.utf16.count && comment.length <= chapter.plainText.utf16.count - comment.start) else { throw ProjectError.invalid("The project contains an invalid passage comment.") }
             }
+            for event in chapter.continuityEvents ?? [] {
+                guard event.start >= 0, event.length >= 0, event.start <= Int.max - event.length,
+                      event.detached || Continuity.validatesAnchor(event, in: chapter.plainText) else { throw ProjectError.invalid("The project contains an invalid continuity passage.") }
+            }
+        }
+        let items = project.continuityItems ?? []
+        for item in items {
+            guard !Continuity.normalized(item.name).isEmpty else { throw ProjectError.invalid("A continuity item has no name.") }
+            var ancestor = item.parentID, visited = Set([item.id])
+            while let id = ancestor {
+                guard visited.insert(id).inserted, let parent = items.first(where: { $0.id == id }), parent.category == item.category else { throw ProjectError.invalid("The project contains an invalid continuity topic.") }
+                ancestor = parent.parentID
+            }
+        }
+        for event in (project.initialContinuity ?? []) + project.chapters.flatMap({ $0.continuityEvents ?? [] }) {
+            guard let item = items.first(where: { $0.id == event.itemID }), item.category == event.action.category else { throw ProjectError.invalid("A continuity change refers to a missing or incompatible item.") }
         }
         for source in project.sources {
             for path in [source.relativePath, source.snapshotPath].compactMap({ $0 }) where !isSafeRelativePath(path) { throw ProjectError.invalid("The project contains an invalid media path.") }
