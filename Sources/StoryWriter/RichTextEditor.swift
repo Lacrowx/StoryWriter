@@ -12,6 +12,8 @@ final class EditorController: ObservableObject {
     @Published var isBold = false
     @Published var isItalic = false
     @Published var isUnderlined = false
+    @Published var alignment: NSTextAlignment = .left
+    @Published var lineSpacing: CGFloat = 6
     @Published var selectionText = ""
     @Published var selectionRange = NSRange(location: 0, length: 0)
     @Published var grammar: InlineGrammarSession?
@@ -35,6 +37,39 @@ final class EditorController: ObservableObject {
             isBold = traits.contains(.boldFontMask); isItalic = traits.contains(.italicFontMask)
         }
         isUnderlined = (attributes[.underlineStyle] as? Int ?? 0) != 0
+        let paragraph = attributes[.paragraphStyle] as? NSParagraphStyle
+        alignment = paragraph?.alignment ?? .left
+        lineSpacing = paragraph?.lineSpacing ?? 6
+    }
+
+    func selectionContainsAttribute(_ key: NSAttributedString.Key, matching: (Any) -> Bool = { _ in true }) -> Bool {
+        guard let storage = textView?.textStorage, storage.length > 0,
+              selectionRange.location >= 0, selectionRange.location < storage.length,
+              NSMaxRange(selectionRange) <= storage.length else { return false }
+        let range = selectionRange.length > 0 ? selectionRange : NSRange(location: selectionRange.location, length: 1)
+        var found = false
+        storage.enumerateAttribute(key, in: range) { value, _, stop in
+            if let value, matching(value), !(value is String && (value as? String)?.isEmpty == true) { found = true; stop.pointee = true }
+        }
+        return found
+    }
+
+    func removeWebLinks() {
+        guard let view = textView as? ManuscriptTextView, let storage = view.textStorage, storage.length > 0 else { return }
+        var range = view.selectedRange()
+        guard range.location >= 0, range.location < storage.length, NSMaxRange(range) <= storage.length else { return }
+        if range.length == 0 {
+            guard let value = storage.attribute(.link, at: range.location, effectiveRange: &range),
+                  ProjectTagReference.from(value) == nil else { return }
+        }
+        let replacement = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: range))
+        var links: [NSRange] = []
+        replacement.enumerateAttribute(.link, in: NSRange(location: 0, length: replacement.length)) { value, part, _ in
+            if let value, ProjectTagReference.from(value) == nil { links.append(part) }
+        }
+        guard !links.isEmpty else { return }
+        for part in links { replacement.removeAttribute(.link, range: part) }
+        if view.replaceAttributedText(replacement, range: range) { view.window?.makeFirstResponder(view); refresh() }
     }
 
     func action(_ selector: Selector) {
@@ -84,7 +119,7 @@ final class EditorController: ObservableObject {
         style.lineSpacing = spacing; style.paragraphSpacing = 12
         if range.length > 0, view.shouldChangeText(in: range, replacementString: nil) { view.textStorage?.addAttribute(.paragraphStyle, value: style, range: range); view.didChangeText() }
         view.typingAttributes[.paragraphStyle] = style
-        view.window?.makeFirstResponder(view)
+        view.window?.makeFirstResponder(view); refresh()
     }
 
     func bulletList(numbered: Bool = false) {
@@ -431,82 +466,115 @@ struct RichTextEditor: NSViewRepresentable {
 
 struct FormattingBar: View {
     @ObservedObject var editor: EditorController
+    var compact = false
     @State private var showLink = false
     @State private var link = ""
     @Environment(\.tagObjects) private var objects
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 7) {
             Menu {
-                ForEach(["Georgia", "Helvetica", "Times New Roman", "Avenir Next", "Menlo"], id: \.self) { font in Button(font) { editor.setFont(name: font) } }
+                ForEach(["Georgia", "Helvetica", "Times New Roman", "Avenir Next", "Menlo"], id: \.self) { font in
+                    Button { editor.setFont(name: font) } label: {
+                        if editor.fontName == font { Label(font, systemImage: "checkmark") }
+                        else { Text(font) }
+                    }
+                }
                 Divider()
                 Button("All fonts…") { editor.textView?.window?.makeFirstResponder(editor.textView); NSFontManager.shared.orderFrontFontPanel(nil) }
-            } label: { Text(editor.fontName).frame(width: 105, alignment: .leading) }
-            .menuStyle(.borderlessButton)
-            Stepper(value: Binding(get: { editor.fontSize }, set: { editor.setFont(size: $0) }), in: 8...72, step: 1) { Text("\(Int(editor.fontSize))").monospacedDigit().frame(width: 24) }.frame(width: 66)
+            } label: { Text(editor.fontName).lineLimit(1).frame(width: 92, alignment: .leading) }
+            .menuStyle(.borderlessButton).help("Font family")
+            Stepper(value: Binding(get: { editor.fontSize }, set: { editor.setFont(size: $0) }), in: 8...72, step: 1) { Text("\(Int(editor.fontSize))").monospacedDigit().frame(width: 24) }
+                .frame(width: 66).help("Font size").accessibilityLabel("Font size")
             Divider().frame(height: 18)
-            formatButton("bold", help: "Bold · ⌘B", active: editor.isBold) { editor.action(#selector(ManuscriptTextView.toggleBoldface(_:))) }
-            formatButton("italic", help: "Italic · ⌘I", active: editor.isItalic) { editor.action(#selector(ManuscriptTextView.toggleItalics(_:))) }
-            formatButton("underline", help: "Underline · ⌘U", active: editor.isUnderlined) { editor.action(#selector(NSTextView.underline(_:))) }
-            Menu {
-                Button("Left") { editor.action(#selector(NSTextView.alignLeft(_:))) }
-                Button("Center") { editor.action(#selector(NSTextView.alignCenter(_:))) }
-                Button("Right") { editor.action(#selector(NSTextView.alignRight(_:))) }
-                Button("Justified") { editor.action(#selector(NSTextView.alignJustified(_:))) }
-            } label: { Image(systemName: "text.alignleft") }.menuStyle(.borderlessButton).frame(width: 26)
-            formatButton("list.bullet", help: "Bulleted list") { editor.bulletList() }
-            Menu {
-                Button("Compact") { editor.paragraphSpacing(2) }
-                Button("Comfortable") { editor.paragraphSpacing(6) }
-                Button("Spacious") { editor.paragraphSpacing(12) }
-            } label: { Image(systemName: "line.3.horizontal") }.menuStyle(.borderlessButton).frame(width: 26).help("Line spacing")
+            HStack(spacing: 2) {
+                formatButton("bold", help: "Bold · ⌘B", active: editor.isBold) { editor.action(#selector(ManuscriptTextView.toggleBoldface(_:))) }
+                formatButton("italic", help: "Italic · ⌘I", active: editor.isItalic) { editor.action(#selector(ManuscriptTextView.toggleItalics(_:))) }
+                formatButton("underline", help: "Underline · ⌘U", active: editor.isUnderlined) { editor.action(#selector(NSTextView.underline(_:))) }
+            }
             Menu {
                 Button("Body") { editor.setFont(name: "Georgia", size: 18) }
                 Button("Heading 1") { editor.setFont(name: "Georgia-Bold", size: 30) }
                 Button("Heading 2") { editor.setFont(name: "Georgia-Bold", size: 24) }
                 Button("Caption") { editor.setFont(name: "Helvetica", size: 12) }
-            } label: { Image(systemName: "textformat.size") }.menuStyle(.borderlessButton).frame(width: 28).help("Text style")
+            } label: { WriterMenuLabel(title: "Style", symbol: "textformat.size", compact: compact, showsSymbol: false) }
+                .menuStyle(.borderlessButton).fixedSize().help("Body text, headings, and captions")
             Menu {
-                Button("Numbered list") { editor.bulletList(numbered: true) }
-                Button("Strikethrough") { editor.strikeThrough() }
-                Button("Add link…") { link = ""; showLink = true }.disabled(editor.selectionText.isEmpty)
-                Button("Remove link") { editor.setAttributes([.link: ""]) }
+                Menu("Alignment") {
+                    alignmentButton("Left", value: .left, selector: #selector(NSTextView.alignLeft(_:)))
+                    alignmentButton("Center", value: .center, selector: #selector(NSTextView.alignCenter(_:)))
+                    alignmentButton("Right", value: .right, selector: #selector(NSTextView.alignRight(_:)))
+                    alignmentButton("Justified", value: .justified, selector: #selector(NSTextView.alignJustified(_:)))
+                }
+                Menu("Line spacing") {
+                    spacingButton("Compact", value: 2)
+                    spacingButton("Comfortable", value: 6)
+                    spacingButton("Spacious", value: 12)
+                }
                 Divider()
+                Button { editor.bulletList() } label: { Label("Bulleted list", systemImage: "list.bullet") }
+                Button { editor.bulletList(numbered: true) } label: { Label("Numbered list", systemImage: "list.number") }
+            } label: { WriterMenuLabel(title: "Paragraph", symbol: "text.alignleft", compact: compact, showsSymbol: false) }
+                .menuStyle(.borderlessButton).fixedSize().help("Alignment, spacing, and lists")
+            Divider().frame(height: 18)
+            Menu {
+                Menu("Character & world tag") {
+                    Button("Browse objects…") { editor.tags?.browse() }
+                    Divider()
+                    ForEach(ObjectTags.groupOrder, id: \.self) { group in
+                        let members = ObjectTags.matches(objects.filter { $0.group == group }, query: "")
+                        if !members.isEmpty { Menu(group) { ForEach(members) { object in Button(object.title) { editor.tags?.insert(object) } } } }
+                    }
+                    if objects.isEmpty { Button("Add characters or world entries first") {}.disabled(true) }
+                    Divider()
+                    Button("Remove tag") { editor.tags?.removeSelectedTag() }.disabled(!editor.selectionContainsAttribute(.link, matching: { ProjectTagReference.from($0) != nil }))
+                }
+                Divider()
+                Button { link = ""; showLink = true } label: { Label("Add web link…", systemImage: "link") }.disabled(editor.selectionText.isEmpty)
+                Button("Remove web link") { editor.removeWebLinks() }.disabled(!editor.selectionContainsAttribute(.link, matching: { ProjectTagReference.from($0) == nil }))
+            } label: { WriterMenuLabel(title: "Insert", symbol: "plus.circle", compact: compact, showsSymbol: false) }
+                .menuStyle(.borderlessButton).fixedSize().help("Character and world tags, and web links · type @ to tag an object")
+                .popover(isPresented: $showLink) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Link selected text").font(.headline)
+                        TextField("https://…", text: $link).textFieldStyle(.roundedBorder).frame(width: 300)
+                        Button("Add link") {
+                            let value = link.contains(":") ? link : "https://\(link)"
+                            if let url = URL(string: value), ["http", "https", "mailto"].contains(url.scheme ?? "") { editor.setAttributes([.link: url]); showLink = false }
+                        }.disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }.padding(20)
+                }
+            Menu {
+                Button { editor.strikeThrough() } label: { Label("Strikethrough", systemImage: "strikethrough") }
                 Menu("Text color") {
                     Button("Black") { editor.setAttributes([.foregroundColor: NSColor.black]) }
                     Button("Green") { editor.setAttributes([.foregroundColor: NSColor(srgbRed: 0.20, green: 0.43, blue: 0.36, alpha: 1)]) }
                     Button("Red") { editor.setAttributes([.foregroundColor: NSColor.systemRed]) }
                     Button("Gray") { editor.setAttributes([.foregroundColor: NSColor.gray]) }
                 }
-                Button("Highlight") { editor.setAttributes([.backgroundColor: NSColor.systemYellow.withAlphaComponent(0.45)]) }
-                Button("Remove highlight") { editor.setAttributes([.backgroundColor: NSColor.clear]) }
-            } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 22).help("Links, color, and more formatting")
-            .popover(isPresented: $showLink) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Link selected text").font(.headline)
-                    TextField("https://…", text: $link).textFieldStyle(.roundedBorder).frame(width: 300)
-                    Button("Add link") {
-                        let value = link.contains(":") ? link : "https://\(link)"
-                        if let url = URL(string: value), ["http", "https", "mailto"].contains(url.scheme ?? "") { editor.setAttributes([.link: url]); showLink = false }
-                    }.disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }.padding(20)
-            }
-            Menu {
-                Button("Browse objects…") { editor.tags?.browse() }
                 Divider()
-                ForEach(ObjectTags.groupOrder, id: \.self) { group in
-                    let members = ObjectTags.matches(objects.filter { $0.group == group }, query: "")
-                    if !members.isEmpty { Menu(group) { ForEach(members) { object in Button(object.title) { editor.tags?.insert(object) } } } }
-                }
-                if objects.isEmpty { Text("Add characters or world entries first") }
-                Divider()
-                Button("Remove tag from selection") { editor.tags?.removeSelectedTag() }
-            } label: { Image(systemName: "tag") }.menuStyle(.borderlessButton).frame(width: 24).help("Tag a character, location, item or world entry · type @ to search. Select existing text to tag it.")
+                Button { editor.setAttributes([.backgroundColor: NSColor.systemYellow.withAlphaComponent(0.45)]) } label: { Label("Highlight", systemImage: "highlighter") }
+                Button("Remove highlight") { editor.setAttributes([.backgroundColor: NSColor.clear]) }.disabled(!editor.selectionContainsAttribute(.backgroundColor, matching: { (($0 as? NSColor)?.alphaComponent ?? 0) > 0 }))
+            } label: { WriterMenuLabel(title: "Format", symbol: "paintbrush", compact: compact, showsSymbol: false) }
+                .menuStyle(.borderlessButton).fixedSize().help("Strikethrough, text color, and highlighting")
             Spacer(minLength: 0)
-            Button { editor.find() } label: { Image(systemName: "magnifyingglass") }.buttonStyle(.plain).help("Find in chapter · ⌘F")
+            Button { editor.find() } label: { Image(systemName: "magnifyingglass").frame(width: 24, height: 24) }
+                .buttonStyle(.plain).help("Find in chapter · ⌘F").accessibilityLabel("Find in chapter")
+        }.font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 7)
+    }
+    private func alignmentButton(_ title: String, value: NSTextAlignment, selector: Selector) -> some View {
+        Button { editor.action(selector) } label: {
+            if editor.alignment == value { Label(title, systemImage: "checkmark") }
+            else { Text(title) }
         }
-        .font(.system(size: 12)).padding(.horizontal, 20).padding(.vertical, 10)
+    }
+    private func spacingButton(_ title: String, value: CGFloat) -> some View {
+        Button { editor.paragraphSpacing(value) } label: {
+            if abs(editor.lineSpacing - value) < 0.01 { Label(title, systemImage: "checkmark") }
+            else { Text(title) }
+        }
     }
     private func formatButton(_ symbol: String, help: String, active: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).frame(width: 25, height: 24).background(active ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 7)) }.buttonStyle(.plain).help(help)
+        Button(action: action) { Image(systemName: symbol).frame(width: 25, height: 24).background(active ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 7)) }
+            .buttonStyle(.plain).help(help).accessibilityLabel(help).accessibilityValue(active ? "On" : "Off")
     }
 }

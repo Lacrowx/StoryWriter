@@ -37,6 +37,7 @@ struct ProjectWorkspace: View {
     @State private var taggedObject: ProjectTagReference?
     @StateObject private var editor = EditorController()
     @StateObject private var reviewFocus = ReviewFocus()
+    @ObservedObject private var grammarService = LocalGrammarService.shared
     @State private var showSearch = false
     @State private var showTimeline = false
     @State private var showPanel = false
@@ -60,34 +61,14 @@ struct ProjectWorkspace: View {
                             Text(project.kind == .story ? (project.genre.isEmpty ? "Make room for your imagination." : project.genre) : "Your ideas, gathered in one place.").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Button { showSearch = true } label: { Label("Search", systemImage: "magnifyingglass") }.buttonStyle(.plain).help("Search passages and project notes · ⇧⌘G").keyboardShortcut("g", modifiers: [.command, .shift])
+                        Button { showSearch = true } label: { Label("Search", systemImage: "magnifyingglass") }.buttonStyle(.plain).help("Search passages and project notes · ⇧⌘G")
                         if project.kind == .story {
                             Button { showExport = true } label: { Label("Export", systemImage: "square.and.arrow.up").padding(.horizontal, 14).padding(.vertical, 9) }.buttonStyle(.plain).writerGlass(radius: 18)
                         }
                         Menu {
-                            Button("Rename project…") { showRename = true }
-                            Button("AI writing brief…") { showWritingBrief = true }
-                            if !(project.ignoredObjectNames ?? []).isEmpty { Button("Suggest ignored names again") { store.update(projectID) { $0.ignoredObjectNames = nil } } }
-                            if project.kind == .story { Button("Review entire manuscript…") { section = .manuscript; showManuscriptReview = true } }
-                            Button("Save portable project copy…") { Panels.savePackage(project, store: store) }
-                            if project.kind == .story {
-                                Button("Story timeline…") { showTimeline = true }
-                                Button("Revision comments") { section = .manuscript; showPanel = true; panelTab = .comments }
-                                Button("Character continuity") { section = .manuscript; showProofreader = false; showPanel = true; panelTab = .continuity }
-                            }
-                            Divider()
-                            Button("Choose automatic backup folder…") { store.chooseBackupFolder(projectID) }
-                            if store.backupConfigurations[projectID] != nil {
-                                Text(store.backupStatus(projectID))
-                                Button("Back up now") { store.scheduleBackup(projectID, immediately: true) }
-                                Button("Turn off automatic backups") { store.disableBackup(projectID) }
-                            }
-                            Divider()
-                            Button("Saved revisions…") { _ = store.saveNow(); showHistory = true }
-                            Button("Show project in Finder") { NSWorkspace.shared.activateFileViewerSelecting([store.packageURL(projectID)]) }
-                            Divider()
-                            Button("Archive project") { store.update(projectID) { $0.archived = true }; store.selectedProjectID = store.visibleProjects.first?.id }
-                        } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 25)
+                            ContextCommandItems(commands: menuContext(project).project)
+                        } label: { WriterMenuLabel(title: "Project", symbol: "folder") }
+                            .menuStyle(.borderlessButton).fixedSize().help("Project details, revisions, backups, and portable copies")
                     }.padding(.horizontal, 28).padding(.top, 18).padding(.bottom, 16)
                     if project.kind == .story {
                         HStack(spacing: 3) {
@@ -131,6 +112,7 @@ struct ProjectWorkspace: View {
             }
             .background(WriterBackdrop())
             .appContextMenu()
+            .focusedSceneValue(\.workspaceMenus, menuContext(project))
             .environment(\.appContextCommands, { workspaceCommands(project) })
             .environment(\.chapterContextCommands, chapterCommands)
             .environment(\.changePassageComment, changeComment)
@@ -184,60 +166,105 @@ struct ProjectWorkspace: View {
         }
     }
 
+    private func menuContext(_ project: StoryProject) -> WorkspaceMenus {
+        let commands = workspaceCommands(project)
+        func group(_ title: String) -> [ContextCommand] { commands.first { $0.title == title }?.children ?? [] }
+        return WorkspaceMenus(project: group("Project"), writing: group("Writing tools"),
+                              navigation: group("Go to"), display: group("Display"),
+                              isStory: project.kind == .story, focusMode: focusMode,
+                              search: { showSearch = true },
+                              toggleFocus: { section = .manuscript; focusMode.toggle() })
+    }
+
+    private func sidebarCommands() -> [ContextCommand] {
+        var commands = WritingPanelTab.allCases.map { tab in
+            ContextCommand.button(tab == .comments ? "Revision comments" : tab.rawValue,
+                                  checked: showPanel && !showProofreader && panelTab == tab,
+                                  symbol: tab == .research ? "pin" : tab == .scenes ? "list.bullet.rectangle" : tab == .comments ? "text.bubble" : "person.crop.rectangle") {
+                section = .manuscript; openPanel(tab)
+            }
+        }
+        commands += [.separator, .button("Hide writing sidebar", enabled: showPanel) { showPanel = false }]
+        return commands
+    }
+
+    private func reviewCommands() -> [ContextCommand] {
+        let session = editor.grammar
+        let currentChapter = section == .manuscript && editor.chapterID == chapterID && session?.view === editor.textView
+        var commands: [ContextCommand] = [
+            .button("Review panel", enabled: chapterID != nil, checked: showProofreader, symbol: "text.badge.checkmark") {
+                section = .manuscript; showPanel = false; showProofreader.toggle()
+            }, .separator
+        ]
+        for scope in GrammarScope.allCases {
+            commands.append(.button(scope == .document ? "Review current chapter" : "Review " + scope.rawValue.lowercased(),
+                                    enabled: currentChapter && !(session?.view?.string.isEmpty ?? true) && (scope != .selection || editor.selectionRange.length > 0)) {
+                session?.review(scope, selection: editor.selectionRange)
+            })
+        }
+        commands += [.button("Review entire manuscript…", symbol: "book.closed") { section = .manuscript; showManuscriptReview = true }, .separator,
+                     .button("Automatic review", checked: grammarService.automatic) { grammarService.automatic.toggle() },
+                     .button("Include style suggestions", checked: grammarService.includeStyle) { grammarService.includeStyle.toggle() },
+                     .button("Review settings…", symbol: "gearshape") { openSettings() }]
+        return commands
+    }
+
     private func workspaceCommands(_ project: StoryProject) -> [ContextCommand] {
         var commands: [ContextCommand] = []
         if project.kind == .story {
             commands.append(.submenu("Go to", WorkspaceSection.allCases.map { target in
-                .button(target.rawValue, checked: section == target) { focusMode = false; section = target }
+                .button(target.rawValue, checked: section == target, symbol: target.symbol) { focusMode = false; section = target }
             }))
             commands.append(.submenu("Writing tools", [
-                .button("New chapter") { section = .manuscript; addChapter() },
-                .button("Import chapter…") { Panels.importChapter(projectID, store: store); section = .manuscript },
-                .button("Research beside manuscript", checked: showPanel && panelTab == .research) { section = .manuscript; showPanel = true; panelTab = .research },
-                .button("Plan scenes", checked: showPanel && panelTab == .scenes) { section = .manuscript; showPanel = true; panelTab = .scenes },
-                .button("Revision comments", checked: showPanel && panelTab == .comments) { section = .manuscript; showPanel = true; panelTab = .comments },
-                .button("Character continuity", checked: showPanel && panelTab == .continuity) { section = .manuscript; showProofreader = false; showPanel = true; panelTab = .continuity },
-                .button("Chapter synopsis & status", checked: showChapterNotes) { section = .manuscript; showChapterNotes.toggle() },
-                .button("Proofreader panel", checked: showProofreader) { section = .manuscript; showProofreader.toggle() },
-                .button("Review entire manuscript…") { section = .manuscript; showManuscriptReview = true },
-                .button("Story timeline…") { showTimeline = true }
+                .button("New chapter", symbol: "doc.badge.plus") { section = .manuscript; addChapter() },
+                .button("Import chapter…", symbol: "square.and.arrow.down") { Panels.importChapter(projectID, store: store); section = .manuscript }, .separator,
+                .submenu("Writing sidebar", sidebarCommands(), symbol: "sidebar.right"),
+                .button("Chapter notes", enabled: chapterID != nil, checked: showChapterNotes, symbol: "note.text") { section = .manuscript; showChapterNotes.toggle() },
+                .button("Story timeline…", symbol: "calendar") { showTimeline = true }, .separator,
+                .submenu("Review writing", reviewCommands(), symbol: "text.badge.checkmark")
             ]))
-            commands.append(.submenu("View", [
-                .button("Focus mode", checked: focusMode) { section = .manuscript; focusMode.toggle() },
-                .button("Hide side panel", enabled: showPanel) { showPanel = false },
+            commands.append(.button(focusMode ? "Exit focus mode" : "Enter focus mode", checked: focusMode) { section = .manuscript; focusMode.toggle() })
+            commands.append(.submenu("Display", [
                 .submenu("Reading width", ReadingWidth.allCases.map { width in
                     .button(width.rawValue, checked: readingWidth == width.rawValue) { readingWidth = width.rawValue }
                 }),
                 .submenu("Display zoom", [0.75, 0.9, 1.0, 1.1, 1.25, 1.5].map { zoom in
                     .button("\(Int(zoom * 100))%", checked: abs(readingZoom - zoom) < 0.001) { readingZoom = zoom }
-                }),
+                }), .separator,
                 .button("Dim paper", checked: dimPaper) { dimPaper.toggle() },
                 .button("Pencil comments on page", checked: showPencilComments) { showPencilComments.toggle() }
             ]))
         }
-        commands.append(.button("Search project…") { showSearch = true })
+        commands.append(.button("Search project…", symbol: "magnifyingglass") { showSearch = true })
         var projectCommands: [ContextCommand] = [
-            .button("Save now") { _ = store.saveNow() },
-            .button("Save portable project copy…") { if let current = store.project(projectID) { Panels.savePackage(current, store: store) } },
-            .button("Rename project…") { showRename = true },
-            .button("AI writing brief…") { showWritingBrief = true },
-            .button("Add reference files…") { Panels.importSources(projectID, store: store) },
-            .button("Saved revisions…") { if store.saveNow() { showHistory = true } },
-            .button("Create revision checkpoint") { do { if store.saveNow() { try store.checkpoint(projectID) } } catch { store.errorMessage = error.localizedDescription } }
+            .button("Rename project…", symbol: "pencil") { showRename = true },
+            .button("AI writing brief…", symbol: "text.alignleft") { showWritingBrief = true }
         ]
-        if project.kind == .story { projectCommands.append(.button("Export manuscript…") { showExport = true }) }
-        projectCommands += [.separator, .button("Choose automatic backup folder…") { store.chooseBackupFolder(projectID) }]
-        if store.backupConfigurations[projectID] != nil {
-            projectCommands += [.button("Back up now") { store.scheduleBackup(projectID, immediately: true) }, .button("Turn off automatic backups") { store.disableBackup(projectID) }]
+        if !(project.ignoredObjectNames ?? []).isEmpty {
+            projectCommands.append(.button("Suggest ignored names again") { store.update(projectID) { $0.ignoredObjectNames = nil } })
         }
-        projectCommands.append(.button("Show project in Finder") { NSWorkspace.shared.activateFileViewerSelecting([store.packageURL(projectID)]) })
+        projectCommands += [.separator,
+            .button("Save now", symbol: "checkmark.circle") { _ = store.saveNow() },
+            .button("Save portable copy…", symbol: "externaldrive") { if let current = store.project(projectID) { Panels.savePackage(current, store: store) } },
+            .button("Add reference files…", symbol: "tray.and.arrow.down") { Panels.importSources(projectID, store: store) }
+        ]
+        if project.kind == .story { projectCommands.append(.button("Export manuscript…", symbol: "square.and.arrow.up") { showExport = true }) }
+        projectCommands += [.separator, .submenu("Saved revisions", [
+            .button("Browse saved revisions…", symbol: "clock.arrow.circlepath") { if store.saveNow() { showHistory = true } },
+            .button("Create checkpoint", symbol: "bookmark") { do { if store.saveNow() { try store.checkpoint(projectID) } } catch { store.errorMessage = error.localizedDescription } }
+        ], symbol: "clock.arrow.circlepath")]
+        var backups: [ContextCommand] = [.button("Choose backup folder…") { store.chooseBackupFolder(projectID) }]
+        if store.backupConfigurations[projectID] != nil {
+            backups += [.button(store.backupStatus(projectID), enabled: false) {}, .separator,
+                        .button("Back up now") { store.scheduleBackup(projectID, immediately: true) },
+                        .button("Turn off automatic backups") { store.disableBackup(projectID) }]
+        }
+        projectCommands += [.submenu("Automatic backups", backups, symbol: "externaldrive.badge.checkmark"),
+                            .button("Show project in Finder", symbol: "folder") { NSWorkspace.shared.activateFileViewerSelecting([store.packageURL(projectID)]) }, .separator,
+                            .button(project.archived ? "Restore to library" : "Archive project", symbol: "archivebox") {
+                                store.update(projectID) { $0.archived.toggle() }; store.selectedProjectID = store.visibleProjects.first?.id
+                            }]
         commands.append(.submenu("Project", projectCommands))
-        let service = LocalGrammarService.shared
-        commands.append(.submenu("Review settings", [
-            .button("Automatic review", checked: service.automatic) { service.automatic.toggle() },
-            .button("Include style suggestions", checked: service.includeStyle) { service.includeStyle.toggle() },
-            .button("Configure writing review…") { openSettings() }
-        ]))
         commands += [.separator] + libraryCommands()
         return commands
     }
@@ -318,25 +345,10 @@ struct ProjectWorkspace: View {
                     HStack(spacing: 14) {
                         WritingTextArea(text: store.itemBinding(projectID, \.chapters, id: chapter.id, fallback: chapter).title, height: 28, label: "chapter title", fontSize: 17, compact: true, chrome: true).environment(\.grammarNamespace, chapter.id.uuidString)
                         Spacer(minLength: 0)
-                        HStack(spacing: 16) {
-                        Menu {
-                            Button("Research") { openPanel(.research) }
-                            Button("Scenes") { openPanel(.scenes) }
-                            Button("Character continuity") { openPanel(.continuity) }
-                            Button("Revision comments") { openPanel(.comments) }
-                            Divider()
-                            Button("Add comment to selection") { if let view = editor.textView { addComment(chapterID: chapter.id, range: view.selectedRange(), expectedText: view.string) } }.disabled(editor.selectionText.isEmpty)
-                            if showPanel { Divider(); Button("Hide writing sidebar") { showPanel = false } }
-                        } label: { Label("Tools", systemImage: "sidebar.right").foregroundStyle(showPanel ? Color.accentColor : .primary) }
-                            .menuStyle(.borderlessButton).fixedSize().help("Research, scenes, comments, and character continuity beside your writing")
-                        Button { showChapterNotes.toggle() } label: { Image(systemName: "note.text") }.help("Chapter synopsis & status")
-                        Button {
-                            do { try ExportService.copyForWebsite(chapter); copied = true; Task { try? await Task.sleep(nanoseconds: 2_000_000_000); copied = false } }
-                            catch { store.errorMessage = error.localizedDescription }
-                        } label: { Image(systemName: copied ? "checkmark" : "doc.on.clipboard") }.help("Copy formatted chapter for a website")
-                        Button { showProofreader.toggle() } label: { Image(systemName: "text.badge.checkmark").foregroundStyle(showProofreader ? Color.accentColor : .primary) }.help("Review grammar and style")
-                        Button { focusMode.toggle() } label: { Image(systemName: focusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }.help("Focus mode · ⇧⌘F").keyboardShortcut("f", modifiers: [.command, .shift])
-                        }.padding(.horizontal, 16).padding(.vertical, 12).writerGlass(radius: 20)
+                        ViewThatFits(in: .horizontal) {
+                            chapterToolbar(chapter, compact: false)
+                            chapterToolbar(chapter, compact: true)
+                        }
                     }.buttonStyle(.plain).padding(.horizontal, 24).padding(.top, 4).padding(.bottom, 10)
                     if showChapterNotes {
                         HStack(alignment: .top, spacing: 16) {
@@ -347,13 +359,10 @@ struct ProjectWorkspace: View {
                     GeometryReader { geometry in
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack {
-                                FormattingBar(editor: editor)
+                                FormattingBar(editor: editor, compact: geometry.size.width < 720)
                                 Menu {
-                                    Picker("Reading width", selection: $readingWidth) { ForEach(ReadingWidth.allCases) { Text($0.rawValue).tag($0.rawValue) } }
-                                    Picker("Display zoom", selection: $readingZoom) { ForEach([0.75, 0.9, 1.0, 1.1, 1.25, 1.5], id: \.self) { Text("\(Int($0 * 100))%").tag($0) } }
-                                    Toggle("Dim paper", isOn: $dimPaper)
-                                    Toggle("Pencil comments on page", isOn: $showPencilComments)
-                                } label: { Label("View", systemImage: "text.magnifyingglass") }.menuStyle(.borderlessButton).fixedSize().padding(.trailing, 16).help("Reading width, display zoom, and paper color")
+                                    ContextCommandItems(commands: menuContext(project).display)
+                                } label: { WriterMenuLabel(title: "Display", symbol: "text.magnifyingglass") }.menuStyle(.borderlessButton).fixedSize().padding(.trailing, 16).help("Reading width, display zoom, and paper color")
                             }.frame(minWidth: max(680, geometry.size.width))
                         }
                     }.frame(height: 44).writerGlass(radius: 20)
@@ -396,6 +405,48 @@ struct ProjectWorkspace: View {
         }
         }
     }
+    private func chapterToolbar(_ chapter: Chapter, compact: Bool) -> some View {
+        HStack(spacing: 8) {
+            Menu { ContextCommandItems(commands: chapterMenu(chapter)) } label: {
+                WriterMenuLabel(title: "Chapter", symbol: "doc.text", active: showChapterNotes, compact: compact)
+            }.help("Chapter notes, status, comments, and copy for website")
+            Menu { ContextCommandItems(commands: sidebarCommands()) } label: {
+                WriterMenuLabel(title: "Sidebar", symbol: "sidebar.right", active: showPanel, compact: compact)
+            }.help("Research, scenes, comments, and character continuity")
+            Menu { ContextCommandItems(commands: reviewCommands()) } label: {
+                WriterMenuLabel(title: "Review", symbol: "text.badge.checkmark", active: showProofreader, compact: compact)
+            }.help("Review the chapter or manuscript, and configure automatic review")
+            Divider().frame(height: 18)
+            Button { focusMode.toggle() } label: {
+                WriterMenuLabel(title: focusMode ? "Exit focus" : "Focus",
+                                symbol: focusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                                active: focusMode, compact: compact)
+            }.help("Focus mode · ⇧⌘F")
+        }.menuStyle(.borderlessButton).buttonStyle(.plain).fixedSize()
+            .padding(.horizontal, 10).padding(.vertical, 7).writerGlass(radius: 16)
+    }
+
+    private func chapterMenu(_ chapter: Chapter) -> [ContextCommand] {
+        [
+            .button("Chapter notes", checked: showChapterNotes, symbol: "note.text") { showChapterNotes.toggle() },
+            .submenu("Draft status", DraftStatus.allCases.map { status in
+                .button(status.rawValue, checked: chapter.status == status, symbol: status.symbol) {
+                    store.update(projectID) { if let index = $0.chapters.firstIndex(where: { $0.id == chapter.id }) { $0.chapters[index].status = status } }
+                }
+            }, symbol: chapter.status.symbol), .separator,
+            .button("Add comment to selection", enabled: editor.selectionRange.length > 0 && editor.chapterID == chapter.id, symbol: "text.bubble") {
+                if let view = editor.textView { addComment(chapterID: chapter.id, range: view.selectedRange(), expectedText: view.string) }
+            },
+            .button(copied ? "Copied for website" : "Copy formatted chapter for website", symbol: copied ? "checkmark" : "doc.on.clipboard") {
+                guard let current = store.project(projectID)?.chapters.first(where: { $0.id == chapter.id }) else { return }
+                do {
+                    try ExportService.copyForWebsite(current); copied = true
+                    Task { try? await Task.sleep(nanoseconds: 2_000_000_000); copied = false }
+                } catch { store.errorMessage = error.localizedDescription }
+            }
+        ]
+    }
+
     private func navigate(_ target: StoryDestination) {
         destination = target
         focusMode = false

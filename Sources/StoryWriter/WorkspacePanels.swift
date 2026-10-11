@@ -29,7 +29,7 @@ struct ProjectSearchSheet: View {
 }
 
 enum WritingPanelTab: String, CaseIterable, Identifiable {
-    case research = "Research", scenes = "Scenes", comments = "Notes", continuity = "Continuity"
+    case research = "Research", scenes = "Scenes", comments = "Comments", continuity = "Continuity"
     var id: String { rawValue }
 }
 

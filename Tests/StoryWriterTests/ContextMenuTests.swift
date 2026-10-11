@@ -7,12 +7,14 @@ final class ContextMenuTests: XCTestCase {
         _ = NSApplication.shared
         var invoked = 0
         let menu = ContextCommand.menu([
-            .button("Settings…", checked: true) { invoked += 1 },
+            .button("Settings…", checked: true, symbol: "gearshape") { invoked += 1 },
             .button("Unavailable", enabled: false) { invoked += 100 },
-            .submenu("Project", [.button("Save") { invoked += 10 }])
+            .submenu("Project", [.button("Save") { invoked += 10 }], symbol: "folder")
         ])
         let settings = try XCTUnwrap(menu.items.first)
         XCTAssertEqual(settings.state, .on)
+        XCTAssertNotNil(settings.image)
+        XCTAssertNotNil(menu.items[2].image)
         XCTAssertNotNil(settings.target)
         menu.performActionForItem(at: 0)
         XCTAssertEqual(invoked, 1)
@@ -23,6 +25,35 @@ final class ContextMenuTests: XCTestCase {
         XCTAssertEqual(invoked, 1)
         menu.items[2].submenu?.performActionForItem(at: 0)
         XCTAssertEqual(invoked, 11)
+    }
+
+    @MainActor func testLinkMenuStateAndRemovalPreserveProjectTagsAndUndo() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        let view = ManuscriptTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        window.contentView = view; view.allowsUndo = true; view.isRichText = true
+        let editor = EditorController(); editor.textView = view; view.contextEditor = editor
+        let reference = ProjectTagReference(kind: .character, objectID: UUID())
+        let text = NSMutableAttributedString(string: "Ada visits the archive.", attributes: [.font: NSFont.boldSystemFont(ofSize: 18)])
+        text.addAttribute(.link, value: reference.url, range: NSRange(location: 0, length: 3))
+        let webRange = (text.string as NSString).range(of: "archive")
+        text.addAttribute(.link, value: URL(string: "https://example.com")!, range: webRange)
+        view.textStorage?.setAttributedString(text)
+        view.setSelectedRange(NSRange(location: 0, length: 3)); editor.refresh()
+        XCTAssertTrue(editor.selectionContainsAttribute(.link, matching: { ProjectTagReference.from($0) != nil }))
+        XCTAssertFalse(editor.selectionContainsAttribute(.link, matching: { ProjectTagReference.from($0) == nil }))
+        view.setSelectedRange(NSRange(location: 0, length: text.length)); editor.refresh()
+        editor.removeWebLinks()
+        XCTAssertEqual(view.string, text.string)
+        XCTAssertEqual(ProjectTagReference.from(view.textStorage?.attribute(.link, at: 0, effectiveRange: nil)), reference)
+        XCTAssertNil(view.textStorage?.attribute(.link, at: webRange.location, effectiveRange: nil))
+        let font = try XCTUnwrap(view.textStorage?.attribute(.font, at: webRange.location, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(NSFontManager.shared.traits(of: font).contains(.boldFontMask))
+        view.undoManager?.undo()
+        XCTAssertNotNil(view.textStorage?.attribute(.link, at: webRange.location, effectiveRange: nil))
+        view.setSelectedRange(NSRange(location: webRange.location + 1, length: 0)); editor.refresh()
+        editor.removeWebLinks()
+        XCTAssertNil(view.textStorage?.attribute(.link, at: webRange.location, effectiveRange: nil))
+        window.contentView = nil
     }
 
     @MainActor func testRichAndPlainFieldsExposeApplicableActionsAndSelection() throws {

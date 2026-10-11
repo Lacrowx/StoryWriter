@@ -10,13 +10,14 @@ struct ContextCommand: Identifiable {
     var checked: Bool?
     var children: [ContextCommand]?
     var action: (() -> Void)?
+    var symbol: String?
 
     static var separator: ContextCommand { ContextCommand(title: "") }
-    static func button(_ title: String, enabled: Bool = true, checked: Bool? = nil, action: @escaping () -> Void) -> ContextCommand {
-        ContextCommand(title: title, enabled: enabled, checked: checked, action: action)
+    static func button(_ title: String, enabled: Bool = true, checked: Bool? = nil, symbol: String? = nil, action: @escaping () -> Void) -> ContextCommand {
+        ContextCommand(title: title, enabled: enabled, checked: checked, action: action, symbol: symbol)
     }
-    static func submenu(_ title: String, _ children: [ContextCommand]) -> ContextCommand {
-        ContextCommand(title: title, children: children)
+    static func submenu(_ title: String, _ children: [ContextCommand], symbol: String? = nil) -> ContextCommand {
+        ContextCommand(title: title, children: children, symbol: symbol)
     }
 
     static func menu(_ commands: [ContextCommand]) -> NSMenu {
@@ -25,6 +26,7 @@ struct ContextCommand: Identifiable {
             if command.title.isEmpty { menu.addItem(.separator()); continue }
             let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
             item.isEnabled = command.enabled
+            if let symbol = command.symbol { item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: command.title) }
             if let checked = command.checked { item.state = checked ? .on : .off }
             if let children = command.children { item.submenu = Self.menu(children) }
             else if let action = command.action {
@@ -68,10 +70,14 @@ struct ContextCommandItems: View {
         ForEach(commands) { command in
             if command.title.isEmpty { Divider() }
             else if let children = command.children {
-                Menu(command.title) { ContextCommandItems(commands: children) }.disabled(!command.enabled)
+                Menu { ContextCommandItems(commands: children) } label: {
+                    if let symbol = command.symbol { Label(command.title, systemImage: symbol) }
+                    else { Text(command.title) }
+                }.disabled(!command.enabled)
             } else {
                 Button(action: { command.action?() }) {
                     if command.checked == true { Label(command.title, systemImage: "checkmark") }
+                    else if let symbol = command.symbol { Label(command.title, systemImage: symbol) }
                     else { Text(command.title) }
                 }.disabled(!command.enabled)
             }

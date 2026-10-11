@@ -39,6 +39,7 @@ struct StoryWriterApp: App {
         }
         .defaultSize(width: 1320, height: 860)
         .commands {
+            WorkspaceMenuCommands()
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…", action: updates.checkForUpdates).disabled(!updates.canCheckForUpdates)
             }
