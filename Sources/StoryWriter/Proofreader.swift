@@ -236,35 +236,3 @@ struct WritingBackendControls: View {
         }.task(id: service.backend) { await service.ensureConnection() }
     }
 }
-
-struct AppSettings: View {
-    @EnvironmentObject private var store: ProjectStore
-    @AppStorage("osaurusURL") private var baseURL = "http://127.0.0.1:1337/v1"
-    @AppStorage("writingLanguage") private var language = "auto"
-    @ObservedObject private var service = LocalGrammarService.shared
-    var body: some View {
-        Form {
-            UpdateSettings()
-            SyncSettings(sync: store.sync)
-            Section("Writing") {
-                Picker("Spelling language", selection: $language) { Text("Detect English / German").tag("auto"); Text("English").tag("en"); Text("Deutsch").tag("de") }
-                Text("Mac spellchecking works even when Osaurus is closed.").font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Writing review") {
-                WritingBackendControls()
-                Toggle("Check automatically after editing", isOn: $service.automatic)
-                Toggle("Suggest style improvements", isOn: $service.includeStyle)
-                Text("Set a project's AI writing brief from its project menu or Story tab. Reviews include that brief and short summaries of the story, characters and world. Blue marks suggest style improvements; orange marks flag spelling or grammar.").font(.caption).foregroundStyle(.secondary)
-                Text("Automatic checks review the changed paragraph after two seconds. Accept changes individually or by sentence, paragraph, selected passage, or entire text.").font(.caption).foregroundStyle(.secondary)
-            }
-            if service.backend == .osaurus { Section("Osaurus connection") {
-                TextField("Server address", text: $baseURL)
-                Text("Start the server in Osaurus and download a local model. StoryWriter connects only to localhost and lists locally owned models.").font(.caption).foregroundStyle(.secondary)
-                Button(service.connecting ? "Connecting…" : "Test connection") { Task { await service.connect() } }.disabled(service.connecting)
-                if let message = service.message { Text(message).font(.caption).foregroundStyle(.secondary) }
-                if !service.models.isEmpty { Text("Connected · \(service.models.count) local model(s)").foregroundStyle(.green) }
-                Link("Osaurus setup & documentation", destination: URL(string: "https://docs.osaurus.ai")!)
-            } }
-        }.formStyle(.grouped).padding().frame(width: 620, height: 640).task { await service.ensureConnection() }
-    }
-}

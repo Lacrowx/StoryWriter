@@ -46,6 +46,8 @@ struct ProjectWorkspace: View {
     @State private var destination: StoryDestination?
     @State private var continuityRequest: ContinuityRequest?
     @State private var restoredNavigation = false
+    @AppStorage("showChapterOutline") private var showOutline = true
+    @AppStorage("showStatusInFocus") private var statusInFocus = true
     @AppStorage("readingWidth") private var readingWidth = ReadingWidth.medium.rawValue
     @AppStorage("readingZoom") private var readingZoom = 1.0
     @AppStorage("dimPaper") private var dimPaper = false
@@ -102,15 +104,17 @@ struct ProjectWorkspace: View {
                         }
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                HStack(spacing: 7) {
-                    Image(systemName: store.saveStatus.hasPrefix("Saved") ? "checkmark.circle" : "arrow.triangle.2.circlepath").foregroundStyle(store.saveStatus.hasPrefix("Save failed") ? .red : .secondary)
-                    Text(store.saveStatus)
-                    SyncWorkspaceStatus(sync: store.sync, projectID: projectID)
-                    if let backup = store.backupConfigurations[projectID] { Text("·"); Image(systemName: backup.error == nil ? "externaldrive.badge.checkmark" : "exclamationmark.triangle").foregroundStyle(backup.error == nil ? Color.secondary : .orange).help(store.backupStatus(projectID)); Text(backup.error == nil ? (backup.lastSuccess.map { "Backed up " + $0.formatted(date: .omitted, time: .shortened) } ?? "First backup pending") : "Backup needs attention").help(store.backupStatus(projectID)) }
-                    Spacer()
-                    if project.kind == .story { WritingProgressButton(project: project) }
-                    else { Text("\(project.sources.count) references") }
-                }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 24).padding(.vertical, 10)
+                if !focusMode || statusInFocus || store.saveStatus.hasPrefix("Save failed") || store.backupConfigurations[projectID]?.error != nil || store.sync.reviews[projectID] != nil {
+                    HStack(spacing: 7) {
+                        Image(systemName: store.saveStatus.hasPrefix("Saved") ? "checkmark.circle" : "arrow.triangle.2.circlepath").foregroundStyle(store.saveStatus.hasPrefix("Save failed") ? .red : .secondary)
+                        Text(store.saveStatus)
+                        SyncWorkspaceStatus(sync: store.sync, projectID: projectID)
+                        if let backup = store.backupConfigurations[projectID] { Text("·"); Image(systemName: backup.error == nil ? "externaldrive.badge.checkmark" : "exclamationmark.triangle").foregroundStyle(backup.error == nil ? Color.secondary : .orange).help(store.backupStatus(projectID)); Text(backup.error == nil ? (backup.lastSuccess.map { "Backed up " + $0.formatted(date: .omitted, time: .shortened) } ?? "First backup pending") : "Backup needs attention").help(store.backupStatus(projectID)) }
+                        Spacer()
+                        if project.kind == .story { WritingProgressButton(project: project) }
+                        else { Text("\(project.sources.count) references") }
+                    }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 24).padding(.vertical, 10)
+                }
             }
             .background(WriterBackdrop())
             .appContextMenu()
@@ -143,6 +147,7 @@ struct ProjectWorkspace: View {
             .onChange(of: chapterID) { _, value in
                 if restoredNavigation { store.workspacePreferences.rememberChapter(value, in: projectID) }
             }
+            .onChange(of: focusMode) { _, focused in if focused { section = .manuscript } }
             .onChange(of: panelTab) { _, _ in reviewFocus.activate(nil) }
             .sheet(isPresented: $showExport) { ExportSheet(projectID: projectID, chapterID: chapterID) }
             .sheet(isPresented: $showHistory) { RevisionHistorySheet(projectID: projectID).environment(\.navigateStory, navigate) }
@@ -156,6 +161,7 @@ struct ProjectWorkspace: View {
                 chapterID = store.workspacePreferences.chapterID(in: project)
                 section = project.kind == .research ? .references : store.workspacePreferences.section(in: projectID)
                 restoredNavigation = true
+                if focusMode { section = .manuscript }
             }
             .onChange(of: project.chapters.map(\.id)) { _, ids in if !ids.contains(chapterID ?? UUID()) { chapterID = ids.first } }
             .onChange(of: project.aiWritingBrief) { _, _ in
@@ -233,6 +239,7 @@ struct ProjectWorkspace: View {
                 .submenu("Display zoom", [0.75, 0.9, 1.0, 1.1, 1.25, 1.5].map { zoom in
                     .button("\(Int(zoom * 100))%", checked: abs(readingZoom - zoom) < 0.001) { readingZoom = zoom }
                 }), .separator,
+                .button("Chapter outline", checked: showOutline) { showOutline.toggle() },
                 .button("Dim paper", checked: dimPaper) { dimPaper.toggle() },
                 .button("Pencil comments on page", checked: showPencilComments) { showPencilComments.toggle() }
             ]))
@@ -341,7 +348,7 @@ struct ProjectWorkspace: View {
     @ViewBuilder private func manuscript(_ project: StoryProject) -> some View {
         GeometryReader { workspaceGeometry in
         HStack(spacing: 0) {
-            if !focusMode && !showProofreader && (!showPanel || workspaceGeometry.size.width >= 1090) {
+            if showOutline && !focusMode && !showProofreader && (!showPanel || workspaceGeometry.size.width >= 1090) {
                 ChapterOutline(projectID: projectID, selection: $chapterID, onNavigate: navigate).frame(width: 215)
                     .clipShape(RoundedRectangle(cornerRadius: 20))
                     .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.primary.opacity(0.06)))

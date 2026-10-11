@@ -26,7 +26,7 @@ struct Chapter: Codable, Identifiable, Equatable {
     var wordCount: Int { plainText.wordCount }
     var attributedText: NSAttributedString {
         (try? NSAttributedString(data: richText, options: [.documentType: NSAttributedString.DocumentType.rtfd], documentAttributes: nil))
-        ?? NSAttributedString(string: plainText, attributes: WritingStyle.attributes)
+        ?? NSAttributedString(string: plainText, attributes: plainText.isEmpty ? WritingStyle.attributes : WritingStyle.legacyAttributes)
     }
     mutating func setText(_ text: NSAttributedString) throws {
         let data = try text.data(from: NSRange(location: 0, length: text.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd])
@@ -145,10 +145,15 @@ struct StoryProject: Codable, Identifiable, Equatable {
 }
 
 enum WritingStyle {
-    static var attributes: [NSAttributedString.Key: Any] {
+    static var attributes: [NSAttributedString.Key: Any] { attributes(preferences: ApplicationPreferences()) }
+    static func attributes(preferences: ApplicationPreferences) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 6
+        paragraph.lineSpacing = preferences.defaultLineSpacing
         paragraph.paragraphSpacing = 12
+        return [.font: preferences.defaultFont, .foregroundColor: NSColor.black, .paragraphStyle: paragraph]
+    }
+    static var legacyAttributes: [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 6; paragraph.paragraphSpacing = 12
         return [.font: NSFont(name: "Georgia", size: 18) ?? NSFont.systemFont(ofSize: 18), .foregroundColor: NSColor.black, .paragraphStyle: paragraph]
     }
 }

@@ -40,6 +40,19 @@ Open `dist/StoryWriter.app`. You can move the app into your Applications folder.
 
 Use **File → New Reference Collection** (⇧⌘N) to collect sources without creating a manuscript. Rename stories or collections through the project menu next to Export. Archive a project from that menu or its library right-click menu; archived projects remain available through **Archived projects**.
 
+## Make StoryWriter your own
+
+Open **StoryWriter → Settings…** (⌘,). Six sections keep preferences together, with changes saved automatically on this Mac:
+
+- **General:** reopen the last project/chapter/workspace or start in the library; start in focus mode; show the chapter outline, focus-mode status bar, and passage-selection quick actions.
+- **Appearance:** System/Light/Dark appearance, five accent colors, translucent or opaque chrome, Warm/White/Sepia paper, dim paper, paper grain, reading width, display zoom, margins, and pencil comments. A paper preview follows your choices. macOS Reduce Transparency takes priority.
+- **Editor:** default font family, size, and line spacing for empty chapters and the Body style; native spelling/grammar checks, automatic spelling correction, smart quotes/dashes, and website detection in manuscript and planning fields. Existing formatted passages and older plain-text chapters keep their typography.
+- **Writing Review:** English/German language, local backend and model, automatic review and its 1–10 second delay, style suggestions, name recognition, and Osaurus connection controls.
+- **Saving & Sync:** reveal the local library; choose the autosave delay, automatic revision interval, and backup interval; manage the selected project's portable backup folder and iCloud Drive sync. ⌘S saves immediately and quitting still saves first. Intervals apply to subsequent saves or scheduled backups; revisions and backups run only when writing changes.
+- **Updates:** automatic update checks/downloads and a manual check.
+
+General, Appearance, Editor, and saving timings have their own reset buttons. Resets preserve project data, backup folders, sync connections, and review/update choices. Preferences stay outside portable projects and revisions. Hiding the focus status bar still shows save failures, backup errors, and sync conflicts. Display changes never alter exported manuscript formatting.
+
 ## Formatted writing
 
 The Mac menu bar now includes **Project**, **Navigate**, and **Writing** for the active project. The labeled **Project** menu beside Export uses the same actions, with saved revisions and automatic backups in their own submenus. **View** contains **Enter / Exit Focus Mode** (⇧⌘F) and manuscript display settings; **Edit → Find in Project** (⇧⌘G) also works in focus mode.
@@ -50,7 +63,7 @@ Right-click in the manuscript, planning fields, project lists, or workspace to r
 
 The workspace uses consistent system typography, neutral menu labels, and clearly selected navigation tabs. Story, character, world, and research fields share rounded cards and focus outlines; every sidebar search has a clear button. Utility sheets use the same spacing and surfaces, with explanatory empty states. Green accents mark objects, progress, and active controls.
 
-The writing workspace uses a warm paper surface with subtle grain and a soft shadow. The sheet and formatting toolbar fill the available workspace, including in focus mode; text reflows with the window and keeps modest paper margins. Translucent sidebars and floating controls surround the manuscript. On macOS 26 and later, the controls use native Liquid Glass; earlier macOS versions use standard translucent materials. The interface follows the system appearance and Reduce Transparency setting. Paper styling is only part of the editor and is excluded from exports.
+The writing workspace uses a warm paper surface with subtle grain and a soft shadow. The sheet and formatting toolbar fill the available workspace, including in focus mode; text reflows with the window and keeps modest paper margins. Translucent sidebars and floating controls surround the manuscript. On macOS 26 and later, the controls use native Liquid Glass; earlier macOS versions use standard translucent materials. The interface follows your chosen appearance and the macOS Reduce Transparency setting. Paper styling is only part of the editor and is excluded from exports.
 
 Selecting a manuscript passage opens a quick-action bubble beside its first visible selected line. Use **Bold**, **Italic**, **Underline**, **Comment**, **Review**, **Tag**, **Continuity**, or **Copy selection** without returning to the toolbar. The Tag menu suggests matching project objects and opens profiles for tags anywhere in the selected passage; removal is offered only when the passage contains tags. **Suggestions** appears when pending corrections lie within the selection. Actions preserve the selected passage. The bubble waits until dragging finishes and closes on Escape, scrolling, typing, or clicking elsewhere. Keyboard selections work too, in regular and focus mode.
 
@@ -147,7 +160,7 @@ Reviews include the brief plus short summaries of the premise, synopsis, chapter
 
 ### Reviewing and accepting suggestions
 
-1. With automatic review enabled, pausing for two seconds after editing reviews the changed paragraph. The **Auto** switch or Settings turns this off.
+1. With automatic review enabled, pausing after editing reviews the changed paragraph (two seconds by default; adjustable in Settings). The **Auto** switch or Settings turns this off.
 2. Suggestions appear directly in the edited field: orange dotted marks for spelling and grammar, blue for style. Click a marked passage, or the suggestion count, to see the original, proposed replacement, category, and explanation.
 3. **Accept** or **Dismiss** handles one suggestion. Accepting a suggestion opens the next pending suggestion in the same field, wrapping to earlier pending suggestions when necessary; the card closes when the last one is accepted. The field's **Accept** menu handles pending suggestions in the sentence, paragraph, selected passage, or entire field. A batch is one Undo action; formatting is retained where the wording stays unchanged.
 4. The **Review** menu checks a sentence, paragraph, selection, or entire field on demand. The chapter's writing-review button opens the larger panel with language, backend, and model controls. Long texts are reviewed in consecutive sections.
@@ -210,7 +223,7 @@ Name a checkpoint to keep a recognizable milestone. The app retains 30 automatic
 
 ## Automatic portable backups
 
-Use the project menu's **Choose automatic backup folder** to opt into dated portable copies. Backups run after a successful save, at most about every five minutes while the project changes, with a first copy after setup. **Back up now** requests an immediate copy. The bottom bar shows the last successful backup time or a failure indicator; the project menu shows the full status.
+Use the project menu's **Choose automatic backup folder** to opt into dated portable copies. Backups run after a successful save, at most once per configured interval while the project changes (five minutes by default), with a first copy after setup. **Back up now** requests an immediate copy. The bottom bar shows the last successful backup time or a failure indicator; the project menu shows the full status.
 
 Choose a folder separate from the app library, preferably on another drive. A backup becomes visible only after its copy and manifest validation finish; a missing drive or failed copy leaves the working project intact. Copies include research files and history. Dated backups are retained until you remove them. The selected folder and backup status are local to this Mac and are not imported with portable projects. Automatic backups can be turned off in the project menu.
 

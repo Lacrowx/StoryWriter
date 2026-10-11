@@ -97,20 +97,23 @@ final class ObjectNameSession: ObservableObject {
     var ignored: [String] = []
     var create: (String, NewObjectKind) -> ProjectTagReference? = { _, _ in nil }
     var ignoreName: (String) -> Void = { _ in }
+    private var enabled = true
     private var task: Task<Void, Never>?
     private var worker: Task<[ObjectNameSuggestion], Never>?
     private var popover: NSPopover?
     var popoverVisible: Bool { popover?.isShown == true }
     init(view: ManuscriptTextView) { self.view = view }
     deinit { task?.cancel(); worker?.cancel() }
-    func configure(objects: [TaggedProjectObject], ignored: [String], create: @escaping (String, NewObjectKind) -> ProjectTagReference?, ignore: @escaping (String) -> Void) {
-        let changed = self.objects != objects || self.ignored != ignored
+    func configure(objects: [TaggedProjectObject], ignored: [String], create: @escaping (String, NewObjectKind) -> ProjectTagReference?, ignore: @escaping (String) -> Void, enabled: Bool = ApplicationPreferences().discoversNames) {
+        let changed = self.objects != objects || self.ignored != ignored || self.enabled != enabled
+        self.enabled = enabled
         self.objects = objects; self.ignored = ignored; self.create = create; self.ignoreName = ignore
         if changed { textChanged() }
     }
     func textChanged() {
         task?.cancel(); worker?.cancel(); close()
         guard let view else { return }
+        guard enabled else { suggestions = []; snapshot = view.string; redraw(); return }
         if snapshot != view.string { suggestions = []; snapshot = view.string; redraw() }
         else { suggestions = ObjectDiscovery.filter(suggestions, text: snapshot, objects: objects, ignored: ignored); redraw() }
         task = Task { [weak self] in
@@ -121,7 +124,7 @@ final class ObjectNameSession: ObservableObject {
     }
     func scan() {
         task?.cancel(); worker?.cancel()
-        guard let view else { return }
+        guard enabled, let view else { return }
         let text = view.string, objects = objects, ignored = ignored, language = LocalGrammarService.shared.language
         snapshot = text
         let worker = Task.detached(priority: .utility) { ObjectDiscovery.names(in: text, language: language, objects: objects, ignored: ignored) }

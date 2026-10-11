@@ -311,8 +311,8 @@ final class InlineGrammarSession: NSObject, ObservableObject {
             let selection = view.selectedRange()
             pending = true
             task = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard !Task.isCancelled else { return }
+                try? await Task.sleep(nanoseconds: UInt64(ApplicationPreferences().reviewDelay * 1_000_000_000))
+                guard !Task.isCancelled, LocalGrammarService.shared.automatic else { self?.pending = false; return }
                 self?.review(.paragraph, selection: selection)
             }
         }

@@ -58,8 +58,8 @@ final class ProjectStore: ObservableObject {
             }
             projects.sort { $0.modifiedAt > $1.modifiedAt }
             if directories.isEmpty && createExample { let example = StoryProject.example(); projects.append(example); dirty.insert(example.id); _ = saveNow() }
-            selectedProjectID = projects.first(where: { $0.id == workspacePreferences.projectID && !$0.archived })?.id
-                ?? projects.first(where: { !$0.archived })?.id
+            selectedProjectID = workspacePreferences.resumesWorkspace ? projects.first(where: { $0.id == workspacePreferences.projectID && !$0.archived })?.id
+                ?? projects.first(where: { !$0.archived })?.id : nil
             loadBackupSettings()
             for project in projects { scheduleBackup(project.id) }
         } catch { errorMessage = error.localizedDescription }
@@ -88,8 +88,9 @@ final class ProjectStore: ObservableObject {
         change(&projects[index]); projects[index].modifiedAt = Date()
         dirty.insert(id); saveStatus = "Saving…"
         saveTask?.cancel()
+        let delay = ApplicationPreferences(defaults: workspaceDefaults).autosaveDelay
         saveTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
             _ = self?.saveNow()
         }
@@ -112,7 +113,7 @@ final class ProjectStore: ObservableObject {
                 let directory = packageURL(id)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 let manifest = directory.appendingPathComponent("project.json")
-                if FileManager.default.fileExists(atPath: manifest.path), Date().timeIntervalSince(lastRevision[id] ?? .distantPast) > 300 {
+                if FileManager.default.fileExists(atPath: manifest.path), Date().timeIntervalSince(lastRevision[id] ?? .distantPast) > ApplicationPreferences(defaults: workspaceDefaults).revisionInterval {
                     try checkpoint(id)
                 }
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601

@@ -37,7 +37,7 @@ final class SelectionQuickActionSession: NSObject, ObservableObject, NSPopoverDe
     }
 
     func selectionChanged() {
-        guard let view else { close(); return }
+        guard ApplicationPreferences().selectionActions, let view else { close(); return }
         let range = view.selectedRange()
         guard range != observedRange else { return }
         observedRange = range
@@ -82,7 +82,7 @@ final class SelectionQuickActionSession: NSObject, ObservableObject, NSPopoverDe
     }
 
     @discardableResult func present() -> Bool {
-        guard let view, view.window?.isVisible == true,
+        guard ApplicationPreferences().selectionActions, let view, view.window?.isVisible == true,
               Self.isPassage(view.selectedRange(), in: view.string),
               let manager = view.layoutManager, let container = view.textContainer else { close(); return false }
         close()

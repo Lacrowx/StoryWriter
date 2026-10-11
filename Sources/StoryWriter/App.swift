@@ -34,7 +34,7 @@ struct StoryWriterApp: App {
     @StateObject private var updates = AppUpdates.shared
     var body: some Scene {
         Window("StoryWriter", id: "main") {
-            LibraryView().environmentObject(store).tint(AppTheme.accent).accentColor(AppTheme.accent)
+            LibraryView().environmentObject(store).modifier(ApplicationAppearanceModifier())
                 .onAppear { delegate.store = store; updates.start(); store.sync.start() }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await store.sync.checkNow() } }
         }
@@ -64,16 +64,20 @@ struct StoryWriterApp: App {
                 Button("Underline") { NSApp.sendAction(#selector(NSTextView.underline(_:)), to: nil, from: nil) }.keyboardShortcut("u")
             }
         }
-        Settings { AppSettings().environmentObject(store) }
+        Settings { AppSettings().environmentObject(store).modifier(ApplicationAppearanceModifier()) }
     }
 }
 
 enum AppTheme {
-    static let accent = Color(nsColor: NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.52, green: 0.76, blue: 0.64, alpha: 1)
-            : NSColor(srgbRed: 0.20, green: 0.43, blue: 0.36, alpha: 1)
-    })
+    static var accent: Color {
+        let selected = UserDefaults.standard.string(forKey: "accentColor").flatMap(WriterAccent.init(rawValue:)) ?? .sage
+        return color(for: selected)
+    }
+    static func color(for selected: WriterAccent) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            selected.color(dark: appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+        })
+    }
 }
 
 extension Notification.Name {

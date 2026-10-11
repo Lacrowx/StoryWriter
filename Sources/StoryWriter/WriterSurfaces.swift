@@ -4,27 +4,34 @@ import SwiftUI
 /// Real desktop vibrancy lets the wallpaper inform the workspace and sidebars.
 struct DesktopMaterial: NSViewRepresentable {
     var material: NSVisualEffectView.Material = .sidebar
+    @AppStorage("useTransparency") private var transparency = true
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.blendingMode = .behindWindow
         view.state = .followsWindowActiveState
         view.material = material
+        updateNSView(view, context: context)
         return view
     }
 
     func updateNSView(_ view: NSVisualEffectView, context: Context) {
         view.material = material
+        view.state = transparency && !reduceTransparency ? .followsWindowActiveState : .inactive
+        view.wantsLayer = true
+        view.layer?.backgroundColor = transparency && !reduceTransparency ? nil : NSColor.windowBackgroundColor.cgColor
     }
 }
 
 struct WriterBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage("useTransparency") private var transparency = true
 
     var body: some View {
         ZStack {
-            if reduceTransparency {
+            if reduceTransparency || !transparency {
                 Color(nsColor: .windowBackgroundColor)
             } else {
                 DesktopMaterial(material: .underWindowBackground)
@@ -41,9 +48,10 @@ struct WriterBackdrop: View {
 private struct WriterGlass: ViewModifier {
     var radius: CGFloat
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage("useTransparency") private var transparency = true
 
     @ViewBuilder func body(content: Content) -> some View {
-        if reduceTransparency {
+        if reduceTransparency || !transparency {
             content.background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: radius))
                 .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(.primary.opacity(0.12)))
         } else if #available(macOS 26.0, *) {
@@ -64,12 +72,14 @@ extension View {
 /// A restrained, warm sheet. The grain is visual only and never enters the manuscript.
 struct ManuscriptPaper: View {
     @AppStorage("dimPaper") private var dimPaper = false
-    static let color = NSColor(srgbRed: 0.992, green: 0.981, blue: 0.956, alpha: 1)
+    @AppStorage("paperTone") private var tone = PaperTone.warm.rawValue
+    @AppStorage("paperTexture") private var texture = true
+    static var color: NSColor { (UserDefaults.standard.string(forKey: "paperTone").flatMap(PaperTone.init(rawValue:)) ?? .warm).color }
 
     var body: some View {
-        Color(nsColor: dimPaper ? NSColor(srgbRed: 0.105, green: 0.115, blue: 0.13, alpha: 1) : Self.color)
+        Color(nsColor: dimPaper ? NSColor(srgbRed: 0.105, green: 0.115, blue: 0.13, alpha: 1) : (PaperTone(rawValue: tone) ?? .warm).color)
             .overlay {
-                Canvas { context, size in
+                if texture { Canvas { context, size in
                     for row in stride(from: 0, to: Int(size.height), by: 6) {
                         for column in stride(from: 0, to: Int(size.width), by: 6) {
                             let seed = (row &* 31 &+ column &* 17) % 11
@@ -78,7 +88,7 @@ struct ManuscriptPaper: View {
                             context.fill(Path(ellipseIn: rect), with: .color(.brown.opacity(0.025)))
                         }
                     }
-                }.allowsHitTesting(false)
+                }.allowsHitTesting(false) }
             }
     }
 }

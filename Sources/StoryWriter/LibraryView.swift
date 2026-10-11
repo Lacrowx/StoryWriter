@@ -6,6 +6,7 @@ struct LibraryView: View {
     @State private var newKind: ProjectKind?
     @State private var visibility = NavigationSplitViewVisibility.all
     @State private var focusMode = false
+    @State private var appliedStartup = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $visibility) {
@@ -75,6 +76,11 @@ struct LibraryView: View {
         }
         .alert("StoryWriter", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) { Button("OK") { store.errorMessage = nil } } message: { Text(store.errorMessage ?? "") }
         .onReceive(NotificationCenter.default.publisher(for: .newProject)) { notification in newKind = notification.object as? ProjectKind ?? .story }
+        .onAppear {
+            guard !appliedStartup else { return }
+            appliedStartup = true
+            focusMode = store.selectedProject?.kind == .story && ApplicationPreferences().bool("startInFocusMode", fallback: false)
+        }
         .onChange(of: focusMode) { _, focused in visibility = focused ? .detailOnly : .all }
         .onChange(of: store.selectedProjectID) { _, _ in focusMode = false }
     }

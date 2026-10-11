@@ -184,6 +184,7 @@ final class ManuscriptTextView: NSTextView {
     var objectNames: ObjectNameSession?
     var selectionActions: SelectionQuickActionSession?
     var usesManuscriptMargins = true
+    var paperMargins = PaperMargins.balanced
     var onFocus: (() -> Void)?
     var onBlur: (() -> Void)?
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -293,15 +294,17 @@ final class ManuscriptTextView: NSTextView {
     override func layout() {
         super.layout()
         // Use the available sheet width, with modest margins even on large displays.
-        let margin: CGFloat = usesManuscriptMargins ? min(64, max(28, bounds.width * 0.045)) : 8
+        let margin: CGFloat = usesManuscriptMargins ? paperMargins.horizontal(for: bounds.width) : 8
         pencilColumnWidth = PencilComments.columnWidth(pageWidth: bounds.width, margin: margin, hasNotes: pencilComments?.attached.isEmpty == false)
-        let inset = NSSize(width: margin + pencilColumnWidth / 2, height: usesManuscriptMargins ? 36 : 4)
+        let inset = NSSize(width: margin + pencilColumnWidth / 2, height: usesManuscriptMargins ? paperMargins.vertical : 4)
         if textContainerInset != inset { textContainerInset = inset }
         pencilComments?.layout()
     }
 }
 
 struct RichTextEditor: NSViewRepresentable {
+    private var typingPreferences = TypingPreferences()
+    @AppStorage("discoverObjectNames") private var discoverNames = true
     @Environment(\.appContextCommands) private var appCommands
     @Environment(\.chapterContextCommands) private var chapterCommands
     @Environment(\.changePassageComment) private var changeComment
@@ -309,6 +312,11 @@ struct RichTextEditor: NSViewRepresentable {
     @Environment(\.reviewFocus) private var reviewFocus
     @Environment(\.writingReviewContext) private var writingContext
     @Environment(\.storyDestination) private var destination
+    @AppStorage("paperMargins") private var margins = PaperMargins.balanced.rawValue
+    @AppStorage("selectionQuickActions") private var quickActions = true
+    @AppStorage("defaultFontName") private var defaultFont = "Georgia"
+    @AppStorage("defaultFontSize") private var defaultSize = 18.0
+    @AppStorage("defaultLineSpacing") private var defaultSpacing = 6.0
     @AppStorage("readingZoom") private var readingZoom = 1.0
     @AppStorage("dimPaper") private var dimPaper = false
     @Environment(\.tagObjects) private var objects
@@ -321,6 +329,7 @@ struct RichTextEditor: NSViewRepresentable {
     var language: String
     var onError: (String) -> Void
 
+    private var typographyKey: String { "\(defaultFont)/\(defaultSize)/\(defaultSpacing)" }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -342,18 +351,16 @@ struct RichTextEditor: NSViewRepresentable {
         view.appearance = NSAppearance(named: .aqua)
         view.backgroundColor = ManuscriptPaper.color; view.insertionPointColor = .black; view.drawsBackground = false
         view.usesFontPanel = true; view.usesFindBar = true; view.isIncrementalSearchingEnabled = true
-        view.isContinuousSpellCheckingEnabled = true; view.isGrammarCheckingEnabled = true
-        view.isAutomaticSpellingCorrectionEnabled = false
-        view.isAutomaticQuoteSubstitutionEnabled = true; view.isAutomaticDashSubstitutionEnabled = true
-        view.isAutomaticLinkDetectionEnabled = true
+        typingPreferences.apply(to: view)
         view.textStorage?.setAttributedString(chapter.attributedText); view.typingAttributes = WritingStyle.attributes
+        context.coordinator.typographyKey = typographyKey
         let pencil = PencilCommentLayer(view: view); view.pencilComments = pencil
         pencil.update(chapter.comments ?? [], enabled: showPencilComments, change: { changeComment(chapter.id, $0, $1) })
         view.delegate = context.coordinator; context.coordinator.lastData = chapter.richText
         let grammar = InlineGrammarSession(view: view, documentLabel: "chapter", documentKey: writingContext.storageKey("\(chapter.id.uuidString)/body"), context: writingContext); view.grammarSession = grammar; grammar.drawMarks()
         let tags = ObjectTagSession(view: view); tags.objects = objects; tags.open = openTag; tags.create = createObject; tags.ignoreName = ignoreName; view.tagSession = tags
         let names = ObjectNameSession(view: view); view.objectNames = names
-        names.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName); names.textChanged()
+        names.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName, enabled: discoverNames); names.textChanged()
         view.onFocus = { [weak reviewFocus] in reviewFocus?.activate(nil) }
         controller.textView = view; controller.chapterID = chapter.id
         DispatchQueue.main.async { controller.grammar = grammar; controller.tags = tags; controller.objectNames = names }
@@ -373,6 +380,16 @@ struct RichTextEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let view = scroll.documentView as? NSTextView else { return }
+        typingPreferences.apply(to: view)
+        if let manuscript = view as? ManuscriptTextView {
+            manuscript.paperMargins = PaperMargins(rawValue: margins) ?? .balanced
+            manuscript.needsLayout = true
+            if !quickActions { manuscript.selectionActions?.close() }
+        }
+        if context.coordinator.typographyKey != typographyKey {
+            context.coordinator.typographyKey = typographyKey
+            if view.string.isEmpty { view.typingAttributes = WritingStyle.attributes }
+        }
         (view as? ManuscriptTextView)?.contextEditor = controller
         (view as? ManuscriptTextView)?.appContextCommands = appCommands
         (view as? ManuscriptTextView)?.chapterContextCommands = { range, text in chapterCommands(chapter.id, range, text) }
@@ -381,7 +398,7 @@ struct RichTextEditor: NSViewRepresentable {
         (view as? ManuscriptTextView)?.tagSession?.open = openTag
         (view as? ManuscriptTextView)?.tagSession?.create = createObject
         (view as? ManuscriptTextView)?.tagSession?.ignoreName = ignoreName
-        (view as? ManuscriptTextView)?.objectNames?.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName)
+        (view as? ManuscriptTextView)?.objectNames?.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName, enabled: discoverNames)
         (view as? ManuscriptTextView)?.onFocus = { [weak reviewFocus] in reviewFocus?.activate(nil) }
         controller.textView = view; controller.chapterID = chapter.id
         if context.coordinator.lastData != chapter.richText {
@@ -435,6 +452,7 @@ struct RichTextEditor: NSViewRepresentable {
     }
 
     class Coordinator: NSObject, NSTextViewDelegate {
+        var typographyKey = ""
         var parent: RichTextEditor
         var lastData = Data()
         var navigationToken: UUID?
@@ -492,7 +510,11 @@ struct FormattingBar: View {
                 formatButton("underline", help: "Underline · ⌘U", active: editor.isUnderlined) { editor.action(#selector(NSTextView.underline(_:))) }
             }
             Menu {
-                Button("Body") { editor.setFont(name: "Georgia", size: 18) }
+                Button("Body") {
+                    let preferences = ApplicationPreferences()
+                    editor.setFont(name: preferences.defaultFont.fontName, size: preferences.defaultFont.pointSize)
+                    editor.paragraphSpacing(preferences.defaultLineSpacing)
+                }
                 Button("Heading 1") { editor.setFont(name: "Georgia-Bold", size: 30) }
                 Button("Heading 2") { editor.setFont(name: "Georgia-Bold", size: 24) }
                 Button("Caption") { editor.setFont(name: "Helvetica", size: 12) }

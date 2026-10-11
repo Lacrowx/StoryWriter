@@ -74,7 +74,7 @@ extension ProjectStore {
             guard immediately, !backupRunning.contains(id) else { return }
             backupTasks[id]?.cancel(); backupTasks[id] = nil
         }
-        let delay = immediately ? 0 : max(0, 300 - Date().timeIntervalSince(configuration.lastSuccess ?? .distantPast))
+        let delay = immediately ? 0 : max(0, ApplicationPreferences().backupInterval - Date().timeIntervalSince(configuration.lastSuccess ?? .distantPast))
         let generation = UUID()
         backupGenerations[id] = generation
         backupTasks[id] = Task { [weak self] in

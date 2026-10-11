@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 
 struct PlainWritingEditor: NSViewRepresentable {
+    private var typingPreferences = TypingPreferences()
+    @AppStorage("discoverObjectNames") private var discoverNames = true
     @Environment(\.appContextCommands) private var appCommands
     @Environment(\.reviewFocus) private var reviewFocus
     @Environment(\.storyDestination) private var destination
@@ -29,14 +31,13 @@ struct PlainWritingEditor: NSViewRepresentable {
         view.textContainer?.widthTracksTextView = true; view.textContainer?.containerSize = NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude)
         view.textContainerInset = NSSize(width: 8, height: 4)
         view.font = .systemFont(ofSize: fontSize); view.textColor = .textColor; view.backgroundColor = .textBackgroundColor; view.drawsBackground = false
-        view.isContinuousSpellCheckingEnabled = true; view.isGrammarCheckingEnabled = true; view.usesFindBar = true
-        view.isAutomaticSpellingCorrectionEnabled = false
-        view.isAutomaticQuoteSubstitutionEnabled = true; view.isAutomaticDashSubstitutionEnabled = true
+        view.usesFindBar = true
+        typingPreferences.apply(to: view)
         view.string = text; view.delegate = context.coordinator; context.coordinator.lastText = text
         var reviewContext = writingContext; reviewContext.document = label
         let session = InlineGrammarSession(view: view, documentLabel: label, documentKey: writingContext.storageKey(documentKey), context: reviewContext); view.grammarSession = session; session.drawMarks()
         let names = ObjectNameSession(view: view); view.objectNames = names
-        names.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName); names.textChanged()
+        names.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName, enabled: discoverNames); names.textChanged()
         controller.textView = view
         view.onFocus = { [weak controller, weak reviewFocus] in controller?.fieldFocused = true; reviewFocus?.activate(session) }
         view.onBlur = { [weak controller] in controller?.fieldFocused = false }
@@ -47,10 +48,11 @@ struct PlainWritingEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let view = scroll.documentView as? ManuscriptTextView else { return }
+        typingPreferences.apply(to: view)
         view.contextEditor = controller; view.appContextCommands = appCommands
         var reviewContext = writingContext; reviewContext.document = label
         view.grammarSession?.context = reviewContext
-        view.objectNames?.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName)
+        view.objectNames?.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName, enabled: discoverNames)
         view.onFocus = { [weak view, weak reviewFocus, weak controller] in controller?.fieldFocused = true; reviewFocus?.activate(view?.grammarSession) }
         view.onBlur = { [weak controller] in controller?.fieldFocused = false }
         if let destination, destination.field == label,
