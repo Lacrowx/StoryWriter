@@ -102,7 +102,12 @@ final class ObjectMentionLinkerTests: XCTestCase {
         XCTAssertNil(linked(store.project(id)!.chapters[0].attributedText, "The sun"))
         try await Task.sleep(nanoseconds: 100_000_000)
         store.update(id) { $0.worldNotes[0].title = "The Guild" }
-        try await Task.sleep(nanoseconds: 650_000_000)
+        // Wait for the observable result: a busy CI main actor can start the
+        // 600 ms debounce later than the test's own sleep.
+        let deadline = Date().addingTimeInterval(3)
+        while linked(store.project(id)!.chapters[0].attributedText, "The Guild") == nil && Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
         let chapter = store.project(id)!.chapters[0]
         XCTAssertNil(linked(chapter.attributedText, "The sun"))
         XCTAssertEqual(linked(chapter.attributedText, "The Guild"), ProjectTagReference(kind: .world, objectID: store.project(id)!.worldNotes[0].id))
