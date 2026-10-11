@@ -62,8 +62,12 @@ final class AutoTagTests: XCTestCase {
 
     @MainActor private func type(_ text: String, into view: NSTextView, waitingForTagAt index: Int? = nil) {
         for character in text {
+            // Group each key explicitly, as a key event does, rather than relying on run loop timing.
+            view.undoManager?.groupsByEvent = false
+            view.undoManager?.beginUndoGrouping()
             view.insertText(String(character), replacementRange: view.selectedRange())
-            RunLoop.main.run(until: Date().addingTimeInterval(0.005)) // Each key is its own event.
+            view.undoManager?.endUndoGrouping()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.005))
         }
         // Auto-tagging runs after the keystroke finishes; slower machines may need a moment longer.
         let deadline = Date().addingTimeInterval(1)
@@ -79,6 +83,14 @@ final class AutoTagTests: XCTestCase {
             view.textStorage?.setAttributedString(NSAttributedString(string: "", attributes: WritingStyle.attributes))
             view.typingAttributes = WritingStyle.attributes.merging([.font: NSFont.boldSystemFont(ofSize: 18)]) { $1 }
             type("Then Mara ", into: view, waitingForTagAt: 5)
+            XCTAssertEqual(reference(in: view, at: 5), mara.reference)
+            // Undo removes just the tag, keeping the words; redo restores it.
+            view.undoManager?.undo()
+            XCTAssertEqual(view.string, "Then Mara ")
+            XCTAssertNil(reference(in: view, at: 5))
+            view.undoManager?.redo()
+            XCTAssertEqual(reference(in: view, at: 5), mara.reference)
+            view.setSelectedRange(NSRange(location: 10, length: 0))
             type("waited", into: view)
             XCTAssertEqual(view.string, "Then Mara waited")
             XCTAssertEqual(reference(in: view, at: 5), mara.reference)
@@ -87,13 +99,6 @@ final class AutoTagTests: XCTestCase {
             XCTAssertNil(reference(in: view, at: 12), "Following prose stays untagged")
             XCTAssertTrue(NSFontManager.shared.traits(of: view.textStorage!.attribute(.font, at: 5, effectiveRange: nil) as! NSFont).contains(.boldFontMask))
             XCTAssertEqual(view.selectedRange(), NSRange(location: view.string.utf16.count, length: 0))
-            // Undo removes the typing after the tag, then the tag, keeping the word.
-            view.undoManager?.undo()
-            XCTAssertEqual(view.string, "Then Mara ")
-            XCTAssertEqual(reference(in: view, at: 5), mara.reference)
-            view.undoManager?.undo()
-            XCTAssertEqual(view.string, "Then Mara ")
-            XCTAssertNil(reference(in: view, at: 5))
         }
     }
 

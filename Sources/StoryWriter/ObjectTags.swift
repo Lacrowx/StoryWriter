@@ -349,7 +349,7 @@ final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
         inserting = true; self.completion = nil
         view.breakUndoCoalescing(); view.undoManager?.beginUndoGrouping()
         let changed = view.replaceAttributedText(tagged, range: completion.prefix)
-        view.undoManager?.endUndoGrouping(); view.undoManager?.setActionName("Complete \(completion.name)")
+        view.undoManager?.setActionName("Complete \(completion.name)"); view.undoManager?.endUndoGrouping()
         view.breakUndoCoalescing()
         inserting = false
         return changed
@@ -529,11 +529,12 @@ final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
                   (storage.string as NSString).substring(with: match.range) == name,
                   self.objects.contains(where: { $0.reference == match.object.reference }) else { return }
             let selection = view.selectedRanges
-            view.breakUndoCoalescing()
+            // An explicit group keeps the tag a separate undo step from the typing on either side.
+            view.breakUndoCoalescing(); view.undoManager?.beginUndoGrouping()
+            defer { view.undoManager?.setActionName("Tag \(match.object.title)"); view.undoManager?.endUndoGrouping() }
             guard view.shouldChangeText(in: match.range, replacementString: nil) else { return }
             storage.addAttribute(.link, value: match.object.reference.url, range: match.range)
             view.didChangeText()
-            view.undoManager?.setActionName("Tag \(match.object.title)")
             view.selectedRanges = selection
             view.breakUndoCoalescing()
         }
