@@ -123,12 +123,22 @@ final class ObjectNameSession: ObservableObject {
         self.objects = objects; self.ignored = ignored; self.create = create; self.ignoreName = ignore
         if changed { textChanged() }
     }
-    func textChanged() {
+    func textChanged(text: String? = nil) {
         task?.cancel(); worker?.cancel(); close()
         guard let view else { return }
-        guard enabled else { suggestions = []; snapshot = view.string; redraw(); return }
-        if snapshot != view.string { suggestions = []; snapshot = view.string; redraw() }
-        else { suggestions = ObjectDiscovery.filter(suggestions, text: snapshot, objects: objects, ignored: ignored); redraw() }
+        let latest = text ?? String(copyingUTF16: view.string as NSString)
+        guard enabled else {
+            if !suggestions.isEmpty { suggestions = [] }
+            snapshot = latest; redraw(); return
+        }
+        if snapshot != latest {
+            if !suggestions.isEmpty { suggestions = [] }
+            snapshot = latest; redraw()
+        } else {
+            let filtered = ObjectDiscovery.filter(suggestions, text: snapshot, objects: objects, ignored: ignored)
+            if filtered != suggestions { suggestions = filtered }
+            redraw()
+        }
         task = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             guard !Task.isCancelled else { return }
@@ -138,7 +148,8 @@ final class ObjectNameSession: ObservableObject {
     func scan() {
         task?.cancel(); worker?.cancel()
         guard enabled, let view else { return }
-        let text = view.string, objects = objects, ignored = ignored, language = LocalGrammarService.shared.language
+        let text = String(copyingUTF16: view.string as NSString)
+        let objects = objects, ignored = ignored, language = LocalGrammarService.shared.language
         snapshot = text
         let worker = Task.detached(priority: .utility) { ObjectDiscovery.names(in: text, language: language, objects: objects, ignored: ignored) }
         self.worker = worker
@@ -155,8 +166,8 @@ final class ObjectNameSession: ObservableObject {
     private func redraw() {
         if let grammar = view?.grammarSession { grammar.drawMarks() }
         else if let view, let manager = view.layoutManager {
-            manager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: NSRange(location: 0, length: view.string.utf16.count))
-            manager.removeTemporaryAttribute(.underlineColor, forCharacterRange: NSRange(location: 0, length: view.string.utf16.count))
+            manager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: NSRange(location: 0, length: view.textStorage?.length ?? 0))
+            manager.removeTemporaryAttribute(.underlineColor, forCharacterRange: NSRange(location: 0, length: view.textStorage?.length ?? 0))
             drawMarks()
         }
     }
@@ -164,7 +175,7 @@ final class ObjectNameSession: ObservableObject {
     @discardableResult func drawMarks() -> Bool {
         guard let view, !suggestions.isEmpty, snapshot == view.string, let manager = view.layoutManager else { return false }
         var drawn = false
-        for suggestion in suggestions where NSMaxRange(suggestion.range) <= view.string.utf16.count {
+        for suggestion in suggestions where NSMaxRange(suggestion.range) <= (view.textStorage?.length ?? 0) {
             if view.grammarSession?.corrections.contains(where: { NSIntersectionRange($0.range, suggestion.range).length > 0 }) == true { continue }
             manager.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDash.rawValue, .underlineColor: NSColor.systemPurple], forCharacterRange: suggestion.range)
             drawn = true

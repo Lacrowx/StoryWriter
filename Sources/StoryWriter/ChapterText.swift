@@ -1,5 +1,18 @@
 import AppKit
 
+extension String {
+    /// Copy Cocoa text in bulk instead of walking a live text-storage proxy.
+    init(copyingUTF16 source: NSString) {
+        let length = source.length
+        guard length > 0 else { self = ""; return }
+        let units = Array<UInt16>(unsafeUninitializedCapacity: length) { buffer, initialized in
+            source.getCharacters(buffer.baseAddress!, range: NSRange(location: 0, length: length))
+            initialized = length
+        }
+        self = String(decoding: units, as: UTF16.self)
+    }
+}
+
 /// An immutable editing snapshot or an RTFD archive. The on-disk representation
 /// remains the same base64 Data value used by existing portable projects.
 struct ChapterText: Codable, Equatable {

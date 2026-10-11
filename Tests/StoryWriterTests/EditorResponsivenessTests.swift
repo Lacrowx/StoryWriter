@@ -5,6 +5,74 @@ import Combine
 @testable import StoryWriter
 
 final class EditorResponsivenessTests: XCTestCase {
+    @MainActor func testBulkTextCopyPreservesUnicodeAndDoesNotFollowLaterEdits() {
+        let original = "Grüße 👩🏽‍💻 e\u{301}\r\n\u{FFFC}\u{0} End"
+        let storage = NSTextStorage(string: original)
+        let copied = String(copyingUTF16: storage.string as NSString)
+        storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: "Changed")
+        XCTAssertEqual(copied, original)
+        XCTAssertEqual(Array(copied.utf16), Array(original.utf16))
+        XCTAssertEqual(String(copyingUTF16: "" as NSString), "")
+    }
+
+    @MainActor func testContinuousTypingKeepsReviewPendingWithoutRedundantPublications() async throws {
+        let service = LocalGrammarService.shared
+        let wasAutomatic = service.automatic
+        service.automatic = true
+        defer { service.automatic = wasAutomatic }
+        let view = ManuscriptTextView(frame: .zero)
+        view.string = "The writer follows the story."
+        let grammar = InlineGrammarSession(view: view)
+        let names = ObjectNameSession(view: view)
+        view.grammarSession = grammar; view.objectNames = names
+        grammar.textChanged(); names.textChanged()
+        var grammarChanges = 0, nameChanges = 0
+        let grammarObservation = grammar.objectWillChange.sink { grammarChanges += 1 }
+        let nameObservation = names.objectWillChange.sink { nameChanges += 1 }
+        defer { grammar.cancel(); names.cancel() }
+        for _ in 0..<10 {
+            view.textStorage?.append(NSAttributedString(string: "a"))
+            grammar.textChanged(); names.textChanged()
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(grammar.pending, "A cancelled older delay must not clear the new pending review")
+        XCTAssertEqual(grammarChanges, 0)
+        XCTAssertEqual(nameChanges, 0)
+        withExtendedLifetime((grammarObservation, nameObservation)) {}
+    }
+
+    @MainActor func testLongChapterWithInlineSessionsTypingCost() throws {
+        let controller = EditorController()
+        var chapter = Chapter()
+        chapter.setEditingText(NSAttributedString(string: String(repeating: "The writer follows the story.\n", count: 6000), attributes: WritingStyle.attributes))
+        let parent = RichTextEditor(chapter: Binding(get: { chapter }, set: { chapter = $0 }),
+                                    controller: controller, language: "auto", onError: { XCTFail($0) })
+        let coordinator = parent.makeCoordinator()
+        let storage = NSTextStorage(attributedString: chapter.attributedText)
+        let manager = ManuscriptLayoutManager(); storage.addLayoutManager(manager)
+        let container = NSTextContainer(containerSize: NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude))
+        manager.addTextContainer(container)
+        let view = ManuscriptTextView(frame: .zero, textContainer: container)
+        controller.textView = view
+        let grammar = InlineGrammarSession(view: view)
+        let names = ObjectNameSession(view: view)
+        let tags = ObjectTagSession(view: view)
+        view.grammarSession = grammar; view.objectNames = names; view.tagSession = tags
+        defer { grammar.cancel(); names.cancel() }
+        var elapsed = 0.0
+        for _ in 0..<30 {
+            storage.append(NSAttributedString(string: "a", attributes: WritingStyle.attributes))
+            view.setSelectedRange(NSRange(location: storage.length, length: 0))
+            let start = CFAbsoluteTimeGetCurrent()
+            coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view))
+            elapsed += CFAbsoluteTimeGetCurrent() - start
+        }
+        print("Long chapter with inline sessions: \(elapsed * 1000 / 30) ms/key")
+        XCTAssertEqual(chapter.plainText, storage.string)
+        XCTAssertEqual(grammar.snapshot, chapter.plainText)
+        XCTAssertEqual(names.snapshot, chapter.plainText)
+    }
+
     @MainActor func testTypingIsImmediatelySaveableAndUndoKeepsFormattingAndTags() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TypingTests-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

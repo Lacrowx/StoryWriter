@@ -3,6 +3,20 @@ import AppKit
 @testable import StoryWriter
 
 final class PencilCommentTests: XCTestCase {
+    @MainActor func testEmptyMarginDoesNotRequestFullChapterLayout() {
+        let storage = NSTextStorage(string: String(repeating: "A long paragraph.\n", count: 6000))
+        let manager = FullLayoutCountingManager(); storage.addLayoutManager(manager)
+        let container = NSTextContainer(containerSize: NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude))
+        manager.addTextContainer(container)
+        let view = ManuscriptTextView(frame: .zero, textContainer: container)
+        let layer = PencilCommentLayer(view: view)
+        manager.fullLayoutRequests = 0
+        layer.layout()
+        layer.invalidate(); layer.layout()
+        XCTAssertEqual(manager.fullLayoutRequests, 0)
+        XCTAssertTrue(layer.notes.isEmpty)
+    }
+
     func testOnlyMatchingUnresolvedAnchorsAppearOnPage() {
         let text = "👩🏽‍💻 Ada waits. Ben leaves."
         let range = (text as NSString).range(of: "Ada")
@@ -104,5 +118,13 @@ final class PencilCommentTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(coloredPixels, 4, "Pencil connector must remain visible in the margin after drawing the manuscript")
+    }
+}
+
+private final class FullLayoutCountingManager: NSLayoutManager {
+    var fullLayoutRequests = 0
+    override func ensureLayout(for container: NSTextContainer) {
+        fullLayoutRequests += 1
+        super.ensureLayout(for: container)
     }
 }

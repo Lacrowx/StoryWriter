@@ -76,6 +76,15 @@ final class PencilCommentLayer {
         }
         notes.removeAll { !ids.contains($0.comment.id) }
         marks = []; connectors = []
+        // An empty margin must not force TextKit to lay out the entire chapter.
+        guard !active.isEmpty else {
+            if view.minSize.height != 0 {
+                view.minSize = NSSize(width: 0, height: 0)
+                view.sizeToFit()
+            }
+            view.needsDisplay = true
+            return
+        }
         manager.ensureLayout(for: container)
         var bottom: CGFloat = 0
         let origin = view.textContainerOrigin

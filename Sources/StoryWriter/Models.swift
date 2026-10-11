@@ -37,9 +37,7 @@ struct Chapter: Codable, Identifiable, Equatable {
     /// Keep edits current in the project without archiving the entire chapter per key.
     mutating func setEditingText(_ text: NSAttributedString) {
         richText = ChapterText(text: text)
-        // A native copy; a bridged one reads the editor's storage slowly, one character at a time.
-        var string = text.string
-        string.makeContiguousUTF8()
+        let string = String(copyingUTF16: text.string as NSString)
         rebaseAnnotations(from: plainText, to: string)
         plainText = string
     }

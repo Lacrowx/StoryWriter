@@ -288,39 +288,51 @@ final class InlineGrammarSession: NSObject, ObservableObject {
     @Published var pending = false
 
     init(view: ManuscriptTextView, documentLabel: String = "text", documentKey: String = UUID().uuidString, context: WritingReviewContext = WritingReviewContext()) {
-        self.view = view; self.documentLabel = documentLabel; self.documentKey = documentKey; snapshot = view.string
+        let text = String(copyingUTF16: view.string as NSString)
+        self.view = view; self.documentLabel = documentLabel; self.documentKey = documentKey; snapshot = text
         self.context = context
         super.init()
         if let cached = LocalGrammarService.shared.cachedResults[documentKey], cached.context == context {
-            corrections = GrammarText.rebase(cached.corrections, old: cached.snapshot, new: view.string); reviewed = cached.reviewed && cached.snapshot == view.string
+            corrections = GrammarText.rebase(cached.corrections, old: cached.snapshot, new: text); reviewed = cached.reviewed && cached.snapshot == text
         }
         cacheObserver = NotificationCenter.default.addObserver(forName: .grammarCacheChanged, object: nil, queue: .main) { [weak self] notification in
             guard let key = notification.object as? String else { return }
             MainActor.assumeIsolated {
                 guard let self, key == self.documentKey, let view = self.view, let cached = LocalGrammarService.shared.cachedResults[key] else { return }
                 guard cached.context == self.context else { self.resetReview(); return }
-                self.corrections = GrammarText.rebase(cached.corrections, old: cached.snapshot, new: view.string)
-                self.snapshot = view.string; self.reviewed = cached.reviewed && cached.snapshot == view.string; self.drawMarks()
+                let text = String(copyingUTF16: view.string as NSString)
+                self.corrections = GrammarText.rebase(cached.corrections, old: cached.snapshot, new: text)
+                self.snapshot = text; self.reviewed = cached.reviewed && cached.snapshot == text; self.drawMarks()
             }
         }
     }
     deinit { task?.cancel(); continuationTask?.cancel(); if let cacheObserver { NotificationCenter.default.removeObserver(cacheObserver) } }
 
-    func textChanged(automatic: Bool = true) {
+    func textChanged(automatic: Bool = true, text: String? = nil) {
         guard let view else { return }
-        let latest = view.string
-        if !applying && latest != snapshot { reviewed = false; message = nil }
-        corrections = GrammarText.rebase(corrections, old: snapshot, new: latest); snapshot = latest
+        // Reuse the editor's native snapshot. Traversing an NSTextStorage-backed
+        // Swift String repeatedly is expensive in long chapters.
+        let latest = text ?? String(copyingUTF16: view.string as NSString)
+        if !applying && latest != snapshot {
+            if reviewed { reviewed = false }
+            if message != nil { message = nil }
+        }
+        let rebased = GrammarText.rebase(corrections, old: snapshot, new: latest)
+        if rebased != corrections { corrections = rebased }
+        snapshot = latest
         drawMarks()
         guard !applying else { return }
         continuationTask?.cancel()
-        task?.cancel(); checking = false; pending = false
-        if automatic && LocalGrammarService.shared.automatic && GrammarText.hasReviewableText(latest) {
+        task?.cancel()
+        if checking { checking = false }
+        let shouldReview = automatic && LocalGrammarService.shared.automatic && GrammarText.hasReviewableText(latest)
+        if pending != shouldReview { pending = shouldReview }
+        if shouldReview {
             let selection = view.selectedRange()
-            pending = true
             task = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(ApplicationPreferences().reviewDelay * 1_000_000_000))
-                guard !Task.isCancelled, LocalGrammarService.shared.automatic else { self?.pending = false; return }
+                guard !Task.isCancelled else { return }
+                guard LocalGrammarService.shared.automatic else { self?.pending = false; return }
                 self?.review(.paragraph, selection: selection)
             }
         }
@@ -328,7 +340,7 @@ final class InlineGrammarSession: NSObject, ObservableObject {
 
     func review(_ scope: GrammarScope, selection: NSRange? = nil) {
         guard let view else { return }
-        let current = view.string
+        let current = String(copyingUTF16: view.string as NSString)
         let scopeRange = GrammarText.range(for: scope, in: current, selection: selection ?? view.selectedRange())
         guard scopeRange.length > 0 else { message = "Select a passage to review."; return }
         task?.cancel(); checking = true; pending = false; message = nil
@@ -410,7 +422,7 @@ final class InlineGrammarSession: NSObject, ObservableObject {
     func drawMarks() {
         LocalGrammarService.shared.cachedResults[documentKey] = CachedGrammarResult(snapshot: snapshot, corrections: corrections, reviewed: reviewed, context: context)
         guard let view, let manager = view.layoutManager else { return }
-        let range = NSRange(location: 0, length: view.string.utf16.count)
+        let range = NSRange(location: 0, length: view.textStorage?.length ?? 0)
         // Clearing the whole chapter redraws all of it, so skip it while nothing is marked.
         if marksDrawn {
             manager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: range)

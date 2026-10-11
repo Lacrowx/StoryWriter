@@ -602,10 +602,10 @@ struct RichTextEditor: NSViewRepresentable {
             changed.setEditingText(view.attributedString())
             lastData = changed.richText; parent.chapter = changed
             parent.controller.refresh()
-            (view as? ManuscriptTextView)?.grammarSession?.textChanged()
+            (view as? ManuscriptTextView)?.grammarSession?.textChanged(text: changed.plainText)
             (view as? ManuscriptTextView)?.tagSession?.refreshSuggestions()
             (view as? ManuscriptTextView)?.tagSession?.refreshCompletion()
-            (view as? ManuscriptTextView)?.objectNames?.textChanged()
+            (view as? ManuscriptTextView)?.objectNames?.textChanged(text: changed.plainText)
         }
         func textViewDidChangeSelection(_ notification: Notification) {
             if updatingView {
