@@ -233,9 +233,28 @@ enum ObjectTags {
 
 /// Draws tags as soft highlights tinted by kind, and web links with a thin
 /// underline, in place of AppKit's blue hyperlink styling.
-final class ManuscriptLayoutManager: NSLayoutManager {
+final class ManuscriptLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     var showsTags = true
+    /// Dim paper shows dark text in a light color while drawing, so saved text, exports,
+    /// and printing keep the real colors and newly typed text is light at once.
+    var dimsText = false
+    static let dimTextColor = NSColor(srgbRed: 0.87, green: 0.86, blue: 0.83, alpha: 1)
     struct TagHighlight: Equatable { var rect: NSRect; var kind: ProjectTagReference.Kind }
+
+    override init() { super.init(); delegate = self }
+    required init?(coder: NSCoder) { super.init(coder: coder); delegate = self }
+
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldUseTemporaryAttributes attrs: [NSAttributedString.Key: Any], forDrawingToScreen toScreen: Bool, atCharacterIndex charIndex: Int, effectiveRange: NSRangePointer?) -> [NSAttributedString.Key: Any]? {
+        guard dimsText, toScreen, let storage = textStorage, charIndex < storage.length else { return attrs }
+        var run = NSRange()
+        let color = (storage.attribute(.foregroundColor, at: charIndex, effectiveRange: &run) as? NSColor)?.usingColorSpace(.deviceRGB)
+        if let effectiveRange { effectiveRange.pointee = NSIntersectionRange(effectiveRange.pointee, run) }
+        // Black and other dark colors become light; bright colors stay as written.
+        guard color.map({ $0.redComponent + $0.greenComponent + $0.blueComponent < 1.1 }) ?? true else { return attrs }
+        var display = attrs
+        display[.foregroundColor] = Self.dimTextColor
+        return display
+    }
 
     static func color(for kind: ProjectTagReference.Kind) -> NSColor {
         kind == .character ? .systemIndigo : .systemTeal

@@ -273,3 +273,27 @@ final class ObjectTagTests: XCTestCase {
     }
 
 }
+
+final class DimPaperDisplayTests: XCTestCase {
+    func testDarkTextIsLightenedWhenDrawnIncludingNewText() {
+        let storage = NSTextStorage(), manager = ManuscriptLayoutManager()
+        storage.addLayoutManager(manager)
+        let text = NSMutableAttributedString(string: "Plain ", attributes: [.foregroundColor: NSColor.black])
+        text.append(NSAttributedString(string: "Red", attributes: [.foregroundColor: NSColor.systemRed]))
+        storage.setAttributedString(text)
+        storage.append(NSAttributedString(string: " typed")) // New text without any color of its own.
+        func display(at index: Int, toScreen: Bool = true) -> (NSColor?, NSRange) {
+            var range = NSRange(location: 0, length: storage.length)
+            let attributes = manager.layoutManager(manager, shouldUseTemporaryAttributes: [:], forDrawingToScreen: toScreen, atCharacterIndex: index, effectiveRange: &range)
+            return (attributes?[.foregroundColor] as? NSColor, range)
+        }
+        XCTAssertNil(display(at: 0).0, "Ordinary paper keeps the text's own colors")
+        manager.dimsText = true
+        XCTAssertEqual(display(at: 0).0, ManuscriptLayoutManager.dimTextColor)
+        XCTAssertEqual(display(at: 0).1, NSRange(location: 0, length: 6), "Substitution stops where the color changes")
+        XCTAssertNil(display(at: 7).0, "Bright colors stay as written")
+        XCTAssertEqual(display(at: 10).0, ManuscriptLayoutManager.dimTextColor)
+        XCTAssertNil(display(at: 0, toScreen: false).0, "Printing uses the real colors")
+        XCTAssertEqual(storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, NSColor.black, "Saved text is unchanged")
+    }
+}

@@ -400,7 +400,7 @@ struct RichTextEditor: NSViewRepresentable {
         scroll.scrollerStyle = .overlay
         scroll.allowsMagnification = true; scroll.minMagnification = 0.75; scroll.maxMagnification = 1.5
         let storage = NSTextStorage()
-        let manager = ManuscriptLayoutManager(); manager.showsTags = showTags; storage.addLayoutManager(manager)
+        let manager = ManuscriptLayoutManager(); manager.showsTags = showTags; manager.dimsText = dimPaper; storage.addLayoutManager(manager)
         let container = NSTextContainer(containerSize: NSSize(width: 700, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true; manager.addTextContainer(container)
         let view = ManuscriptTextView(frame: .zero, textContainer: container)
@@ -502,20 +502,8 @@ struct RichTextEditor: NSViewRepresentable {
         scroll.appearance = NSAppearance(named: dimPaper ? .darkAqua : .aqua)
         view.appearance = scroll.appearance
         view.insertionPointColor = dimPaper ? .white : .black
-        // Display colors are temporary layout attributes, excluded from saved text and exports.
-        if context.coordinator.displayedDimPaper != dimPaper || replacedText || dimPaper,
-           let manager = view.layoutManager, let storage = view.textStorage {
-            context.coordinator.displayedDimPaper = dimPaper
-            let all = NSRange(location: 0, length: storage.length)
-            manager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: all)
-            if dimPaper {
-                storage.enumerateAttribute(.foregroundColor, in: all) { value, range, _ in
-                    let color = (value as? NSColor)?.usingColorSpace(.deviceRGB)
-                    if color == nil || ((color?.redComponent ?? 0) + (color?.greenComponent ?? 0) + (color?.blueComponent ?? 0)) < 1.1 {
-                        manager.addTemporaryAttribute(.foregroundColor, value: NSColor(srgbRed: 0.87, green: 0.86, blue: 0.83, alpha: 1), forCharacterRange: range)
-                    }
-                }
-            }
+        if let manager = view.layoutManager as? ManuscriptLayoutManager, manager.dimsText != dimPaper {
+            manager.dimsText = dimPaper; view.needsDisplay = true
         }
         if let destination, destination.kind == .chapter, destination.itemID == chapter.id, destination.field == "body", context.coordinator.navigationToken != destination.token {
             context.coordinator.navigationToken = destination.token
@@ -535,7 +523,6 @@ struct RichTextEditor: NSViewRepresentable {
         var lastData = ChapterText()
         var navigationToken: UUID?
         var chapterID: UUID
-        var displayedDimPaper: Bool?
         var spellingLanguage: String?
         init(_ parent: RichTextEditor) { self.parent = parent; chapterID = parent.chapter.id }
         func textDidChange(_ notification: Notification) {
