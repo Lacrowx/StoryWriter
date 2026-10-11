@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct PlainWritingEditor: NSViewRepresentable {
-    private var typingPreferences = TypingPreferences()
+    var typingPreferences = TypingPreferences()
     @AppStorage("discoverObjectNames") private var discoverNames = true
     @Environment(\.appContextCommands) private var appCommands
     @Environment(\.reviewFocus) private var reviewFocus

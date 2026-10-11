@@ -303,7 +303,7 @@ final class ManuscriptTextView: NSTextView {
 }
 
 struct RichTextEditor: NSViewRepresentable {
-    private var typingPreferences = TypingPreferences()
+    var typingPreferences = TypingPreferences()
     @AppStorage("discoverObjectNames") private var discoverNames = true
     @Environment(\.appContextCommands) private var appCommands
     @Environment(\.chapterContextCommands) private var chapterCommands
