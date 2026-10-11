@@ -21,6 +21,8 @@ struct PlainWritingEditor: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
+        context.coordinator.updatingView = true
+        defer { context.coordinator.updatingView = false }
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.drawsBackground = false
         let view = ManuscriptTextView(frame: .zero)
         view.contextEditor = controller; view.appContextCommands = appCommands
@@ -48,6 +50,8 @@ struct PlainWritingEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let view = scroll.documentView as? ManuscriptTextView else { return }
+        context.coordinator.updatingView = true
+        defer { context.coordinator.updatingView = false }
         typingPreferences.apply(to: view)
         view.contextEditor = controller; view.appContextCommands = appCommands
         var reviewContext = writingContext; reviewContext.document = label
@@ -75,13 +79,17 @@ struct PlainWritingEditor: NSViewRepresentable {
         var parent: PlainWritingEditor
         var lastText = ""
         var navigationToken: UUID?
+        var updatingView = false
         init(_ parent: PlainWritingEditor) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? ManuscriptTextView else { return }
             lastText = view.string; parent.text = view.string; parent.controller.refresh(); view.grammarSession?.textChanged()
             view.objectNames?.textChanged()
         }
-        func textViewDidChangeSelection(_ notification: Notification) { parent.controller.refresh() }
+        func textViewDidChangeSelection(_ notification: Notification) {
+            if updatingView { DispatchQueue.main.async { self.parent.controller.refresh() } }
+            else { parent.controller.refresh() }
+        }
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:)), let action = parent.onSubmit { action(); return true }
             return false

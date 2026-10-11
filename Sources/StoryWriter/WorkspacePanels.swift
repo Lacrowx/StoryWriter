@@ -49,7 +49,7 @@ struct WritingSidePanel: View {
             Picker("Writing panel", selection: $tab) { ForEach(WritingPanelTab.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().controlSize(.regular).padding(.horizontal, 16).padding(.bottom, 16)
             Divider()
             switch tab {
-            case .research: ResearchPanel(projectID: projectID, pinned: $pinned)
+            case .research: ResearchPanel(projectID: projectID, pinned: $pinned, chapterID: chapterID, editor: editor)
             case .scenes: ScenePanel(projectID: projectID, chapterID: chapterID, editor: editor)
             case .comments: CommentQueue(projectID: projectID, editor: editor, initialChapterID: chapterID)
             case .continuity: ContinuityPanel(projectID: projectID, chapterID: chapterID, editor: editor)
@@ -62,6 +62,8 @@ struct ResearchPanel: View {
     @EnvironmentObject private var store: ProjectStore
     var projectID: UUID
     @Binding var pinned: PinnedResearch?
+    var chapterID: UUID?
+    @ObservedObject var editor: EditorController
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let project = store.project(projectID) {
@@ -87,6 +89,7 @@ struct ResearchPanel: View {
                                 } else if let note = project.worldNotes.first(where: { $0.id == reference.objectID }) {
                                     let binding = store.itemBinding(projectID, \.worldNotes, id: note.id, fallback: note)
                                     Text(note.title).font(.title2).fontDesign(.serif)
+                                    if note.category == .object { ObjectAwarenessView(projectID: projectID, worldID: note.id, chapterID: chapterID, editor: editor) }
                                     NoteField("At a glance", hint: note.category.rawValue, text: binding.summary, height: 80)
                                     NoteField("Details & rules", hint: "Facts your story relies on", text: binding.details, height: 200)
                                     NoteField("Connections", hint: "Continuity notes", text: binding.connections, height: 100)

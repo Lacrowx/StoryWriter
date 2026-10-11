@@ -96,6 +96,23 @@ struct ContinuityState: Identifiable {
     var id: UUID { item.id }
 }
 
+struct ObjectCharacterState: Identifiable {
+    var character: Character
+    var knowledge: ContinuityState?
+    var possession: ContinuityState?
+    var id: UUID { character.id }
+    var knowledgeLabel: String {
+        guard let action = knowledge?.latest.event.action else { return "No knowledge recorded" }
+        switch action {
+        case .learns, .confirmed: return "Knows about it"
+        case .believes: return "Believes"
+        case .suspects: return "Suspects"
+        case .forgets: return "Forgotten"
+        default: return "No knowledge recorded"
+        }
+    }
+}
+
 enum Continuity {
     static func normalized(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
@@ -143,20 +160,25 @@ enum Continuity {
         }.sorted { ($0.order ?? Int.max, $0.chapterIndex, $0.sceneIndex) < ($1.order ?? Int.max, $1.chapterIndex, $1.sceneIndex) }
     }
     static func location(in project: StoryProject, chapterID: UUID, offset: Int, sourceStart: Int? = nil) -> ContinuityLocation? {
-        let entries = segments(project)
+        location(in: segments(project), chapterID: chapterID, offset: offset, sourceStart: sourceStart)
+    }
+    private static func location(in entries: [Segment], chapterID: UUID, offset: Int, sourceStart: Int? = nil) -> ContinuityLocation? {
         let point = sourceStart ?? offset
         guard let segment = entries.filter({ $0.chapterID == chapterID && $0.start <= point }).max(by: { $0.start < $1.start }),
               let rank = entries.firstIndex(where: { $0.chapterID == segment.chapterID && $0.start == segment.start }) else { return nil }
         return ContinuityLocation(rank: rank, offset: offset - segment.start)
     }
-    static func history(in project: StoryProject, itemID: UUID? = nil, characterID: UUID? = nil) -> [LocatedContinuityEvent] {
+    static func history(in project: StoryProject, itemID: UUID? = nil, characterID: UUID? = nil, itemIDs: Set<UUID>? = nil) -> [LocatedContinuityEvent] {
+        let segments = segments(project)
         var result: [LocatedContinuityEvent] = []
-        for event in project.initialContinuity ?? [] {
+        for event in project.initialContinuity ?? [] where itemIDs == nil || itemIDs!.contains(event.itemID) {
             result.append(LocatedContinuityEvent(event: event, location: ContinuityLocation(rank: -1, offset: 0), sequence: result.count))
         }
         for chapter in project.chapters {
             for event in chapter.continuityEvents ?? [] {
-                guard let location = location(in: project, chapterID: chapter.id, offset: event.effectiveOffset, sourceStart: event.start) else { continue }
+                guard (itemID == nil || event.itemID == itemID), (characterID == nil || event.characterID == characterID),
+                      itemIDs == nil || itemIDs!.contains(event.itemID),
+                      let location = location(in: segments, chapterID: chapter.id, offset: event.effectiveOffset, sourceStart: event.start) else { continue }
                 result.append(LocatedContinuityEvent(event: event, chapterID: chapter.id, location: location, sequence: result.count))
             }
         }
@@ -164,14 +186,29 @@ enum Continuity {
             .sorted { $0.location == $1.location ? $0.sequence < $1.sequence : $0.location < $1.location }
     }
     static func states(in project: StoryProject, characterID: UUID, chapterID: UUID, offset: Int, sourceStart: Int? = nil) -> [ContinuityState] {
-        guard let cursor = location(in: project, chapterID: chapterID, offset: offset, sourceStart: sourceStart) else { return [] }
-        var latest: [UUID: LocatedContinuityEvent] = [:]
-        for entry in history(in: project, characterID: characterID) where entry.location <= cursor && !entry.event.detached && !entry.event.planned {
+        snapshots(in: project, chapterID: chapterID, offset: offset, sourceStart: sourceStart, characterID: characterID)[characterID] ?? []
+    }
+    private static func snapshots(in project: StoryProject, chapterID: UUID, offset: Int, sourceStart: Int? = nil, characterID: UUID? = nil, itemIDs: Set<UUID>? = nil) -> [UUID: [ContinuityState]] {
+        guard let cursor = location(in: project, chapterID: chapterID, offset: offset, sourceStart: sourceStart) else { return [:] }
+        var latest: [UUID: [UUID: LocatedContinuityEvent]] = [:]
+        for entry in history(in: project, characterID: characterID, itemIDs: itemIDs) where entry.location <= cursor && !entry.event.detached && !entry.event.planned {
             // Repetition is evidence of a mention, not a new first acquisition.
-            if entry.event.action != .reminded { latest[entry.event.itemID] = entry }
+            if entry.event.action != .reminded { latest[entry.event.characterID, default: [:]][entry.event.itemID] = entry }
         }
-        return project.trackedContinuityItems.compactMap { item in latest[item.id].map { ContinuityState(item: item, latest: $0) } }
-            .sorted { $0.item.name.localizedStandardCompare($1.item.name) == .orderedAscending }
+        let items = Dictionary(uniqueKeysWithValues: project.trackedContinuityItems.map { ($0.id, $0) })
+        return latest.mapValues { entries in
+            entries.compactMap { id, entry in items[id].map { ContinuityState(item: $0, latest: entry) } }
+                .sorted { $0.item.name.localizedStandardCompare($1.item.name) == .orderedAscending }
+        }
+    }
+    static func objectStates(in project: StoryProject, worldID: UUID, chapterID: UUID, offset: Int) -> [ObjectCharacterState] {
+        let knowledgeIDs = Set(project.continuityChoices(for: .knowledge).filter { $0.worldObjectID == worldID }.map(\.id))
+        let possessionIDs = Set(project.continuityChoices(for: .possession).filter { $0.worldObjectID == worldID }.map(\.id))
+        let snapshots = snapshots(in: project, chapterID: chapterID, offset: offset, itemIDs: knowledgeIDs.union(possessionIDs))
+        return project.characters.map { person in
+            let states = snapshots[person.id] ?? []
+            return ObjectCharacterState(character: person, knowledge: states.first { knowledgeIDs.contains($0.id) }, possession: states.first { possessionIDs.contains($0.id) })
+        }
     }
     static func viewpoint(in chapter: Chapter, offset: Int) -> UUID? {
         chapter.orderedScenes.last(where: { $0.start <= offset })?.viewpointID
@@ -217,10 +254,22 @@ enum Continuity {
 }
 
 extension StoryProject {
+    @discardableResult mutating func addStoryObject(name: String, summary: String = "") throws -> WorldNote {
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !Continuity.normalized(title).isEmpty else { throw ProjectError.invalid("Give the object a name.") }
+        let key = Continuity.normalized(title)
+        let existing = worldNotes.filter { $0.category == .object && ([$0.title] + ($0.aliases ?? [])).contains { Continuity.normalized($0) == key } }
+        guard existing.count <= 1 else { throw ProjectError.invalid("Several objects use this name. Choose the intended object from World or give this one a distinct name.") }
+        if let object = existing.first { return object }
+        let object = WorldNote(title: title, category: .object, summary: summary)
+        worldNotes.append(object)
+        return object
+    }
     /// Only recorded identities appear in character state; World items are offered separately.
     var trackedContinuityItems: [ContinuityItem] {
-        (continuityItems ?? []).map { item in
-            guard let worldID = item.worldObjectID, let world = worldNotes.first(where: { $0.id == worldID }) else { return item }
+        let worlds = Dictionary(uniqueKeysWithValues: worldNotes.map { ($0.id, $0) })
+        return (continuityItems ?? []).map { item in
+            guard let worldID = item.worldObjectID, let world = worlds[worldID] else { return item }
             return continuityDisplay(item, world: world)
         }
     }
@@ -236,27 +285,34 @@ extension StoryProject {
         return result
     }
 
-    /// Reuses an unambiguous manually tracked possession without changing its history.
+    /// Offer awareness and possession independently, reusing unambiguous legacy identities.
     func continuityChoices(for category: ContinuityCategory, parentID: UUID? = nil) -> [ContinuityItem] {
         var choices = trackedContinuityItems.filter { $0.category == category }
-        guard category == .possession, parentID == nil else { return choices }
+        guard [.possession, .knowledge].contains(category), parentID == nil else { return choices }
         let objects = worldNotes.filter { $0.category == .object }
         func names(_ title: String, _ aliases: [String]) -> Set<String> {
             Set(([title] + aliases).map(Continuity.normalized).filter { !$0.isEmpty })
         }
-        for world in objects {
-            guard !choices.contains(where: { $0.worldObjectID == world.id }) else { continue }
-            let labels = names(world.title, world.aliases ?? [])
-            let existing = choices.indices.filter {
-                choices[$0].worldObjectID == nil && choices[$0].parentID == nil &&
-                !names(choices[$0].name, choices[$0].aliases).isDisjoint(with: labels)
-            }
-            let matchingWorldObjects = objects.filter { !names($0.title, $0.aliases ?? []).isDisjoint(with: labels) }
+        let objectLabels = objects.map { names($0.title, $0.aliases ?? []) }
+        var worldsByLabel: [String: Set<Int>] = [:]
+        for (index, labels) in objectLabels.enumerated() {
+            for label in labels { worldsByLabel[label, default: []].insert(index) }
+        }
+        var choicesByLabel: [String: Set<Int>] = [:]
+        var linkedWorldIDs = Set(choices.compactMap(\.worldObjectID))
+        for (index, item) in choices.enumerated() where item.worldObjectID == nil && item.parentID == nil {
+            for label in names(item.name, item.aliases) { choicesByLabel[label, default: []].insert(index) }
+        }
+        for (worldIndex, world) in objects.enumerated() {
+            guard linkedWorldIDs.insert(world.id).inserted else { continue }
+            let labels = objectLabels[worldIndex]
+            let existing = labels.reduce(into: Set<Int>()) { $0.formUnion(choicesByLabel[$1] ?? []) }.filter { choices[$0].worldObjectID == nil }
+            let matchingWorldObjects = labels.reduce(into: Set<Int>()) { $0.formUnion(worldsByLabel[$1] ?? []) }
             if existing.count == 1, matchingWorldObjects.count == 1, let index = existing.first {
                 choices[index].worldObjectID = world.id
                 choices[index] = continuityDisplay(choices[index], world: world)
             } else {
-                choices.append(ContinuityItem(id: world.id, name: world.title, category: .possession,
+                choices.append(ContinuityItem(id: world.id, name: world.title, category: category,
                     aliases: world.aliases ?? [], details: [world.summary, world.details].filter { !$0.isEmpty }.joined(separator: "\n\n"), worldObjectID: world.id))
             }
         }

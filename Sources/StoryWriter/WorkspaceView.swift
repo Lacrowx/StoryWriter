@@ -48,6 +48,7 @@ struct ProjectWorkspace: View {
     @State private var pinned: PinnedResearch?
     @State private var destination: StoryDestination?
     @State private var continuityRequest: ContinuityRequest?
+    @State private var addObjectRequest: AddStoryObjectRequest?
     @State private var restoredNavigation = false
     @AppStorage("showChapterOutline") private var showOutline = true
     @AppStorage("showStatusInFocus") private var statusInFocus = true
@@ -144,6 +145,11 @@ struct ProjectWorkspace: View {
             .sheet(isPresented: $showSearch) { ProjectSearchSheet(projectID: projectID).environment(\.navigateStory, navigate) }
             .sheet(isPresented: $showTimeline) { TimelineSheet(projectID: projectID).environment(\.navigateStory, navigate) }
             .sheet(item: $continuityRequest) { request in ContinuityRecordSheet(projectID: projectID, request: request) }
+            .sheet(item: $addObjectRequest) { request in
+                AddStoryObjectSheet(projectID: projectID, request: request, editor: editor, added: { id in
+                    pinned = .object(ProjectTagReference(kind: .world, objectID: id)); showProofreader = false; showPanel = true; panelTab = .research
+                })
+            }
             .onChange(of: section) { _, value in
                 reviewFocus.activate(nil)
                 if restoredNavigation { store.workspacePreferences.rememberSection(value, in: projectID) }
@@ -292,6 +298,9 @@ struct ProjectWorkspace: View {
         guard let chapter = store.project(projectID)?.chapters.first(where: { $0.id == id }), chapter.plainText == expectedText else { return [] }
         return [
             .button("Add comment to selection", enabled: range.length > 0) { addComment(chapterID: id, range: range, expectedText: expectedText) },
+            .button("Add object…", symbol: "shippingbox") {
+                addObjectRequest = AddStoryObjectRequest(chapterID: id, range: range, expectedText: expectedText)
+            },
             .submenu("Track a character change", continuityCommands(chapter: chapter, range: range, expectedText: expectedText)),
             .button("Split scene here", enabled: range.location > 0 && range.location < expectedText.utf16.count) {
                 guard var current = store.project(projectID)?.chapters.first(where: { $0.id == id }), current.plainText == expectedText else { return }

@@ -23,7 +23,7 @@ final class WorldPossessionTests: XCTestCase {
         XCTAssertEqual(choices.map(\.worldObjectID), project.worldNotes.prefix(2).map { Optional($0.id) })
         XCTAssertEqual(Continuity.matches(choices, query: "Wanderstab").first?.name, "Stock")
         XCTAssertEqual(Continuity.matches(choices, query: "Außerdem hatte er seinen Stock dabei.").first?.name, "Stock")
-        XCTAssertTrue(project.continuityChoices(for: .knowledge).isEmpty)
+        XCTAssertEqual(Set(project.continuityChoices(for: .knowledge).map(\.name)), Set(["Stock", "Zettel"]))
         XCTAssertTrue(project.continuityChoices(for: .possession, parentID: UUID()).isEmpty)
         XCTAssertNil(project.continuityItems)
         XCTAssertTrue(Continuity.states(in: project, characterID: project.characters[0].id, chapterID: project.chapters[0].id, offset: project.chapters[0].plainText.utf16.count).isEmpty)

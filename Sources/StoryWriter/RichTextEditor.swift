@@ -15,9 +15,10 @@ final class EditorController: ObservableObject {
     @Published var alignment: NSTextAlignment = .left
     @Published var lineSpacing: CGFloat = 6
     @Published var selectionText = ""
-    /// Always current; views see caret moves once they settle, and new or cleared selections at once.
+    /// Always current; publish at most once per display frame without waiting for movement to stop.
     private(set) var selectionRange = NSRange(location: 0, length: 0)
     private var selectionSettle: Task<Void, Never>?
+    private var positionChapterID: UUID?
     @Published var grammar: InlineGrammarSession?
     @Published var tags: ObjectTagSession?
     @Published var objectNames: ObjectNameSession?
@@ -26,15 +27,13 @@ final class EditorController: ObservableObject {
     func refresh() {
         guard let view = textView else { return }
         let range = view.selectedRange()
-        if selectionRange != range {
-            let selecting = range.length > 0 || selectionRange.length > 0
-            if selecting { objectWillChange.send() }
+        if selectionRange != range || positionChapterID != chapterID {
             selectionRange = range
-            selectionSettle?.cancel()
-            if !selecting {
+            positionChapterID = chapterID
+            if selectionSettle == nil {
                 selectionSettle = Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: 300_000_000)
-                    guard !Task.isCancelled else { return }
+                    try? await Task.sleep(nanoseconds: 16_000_000)
+                    self?.selectionSettle = nil
                     self?.objectWillChange.send()
                 }
             }
@@ -94,6 +93,19 @@ final class EditorController: ObservableObject {
         guard !links.isEmpty else { return }
         for part in links { replacement.removeAttribute(.link, range: part) }
         if view.replaceAttributedText(replacement, range: range) { view.window?.makeFirstResponder(view); refresh() }
+    }
+
+    @discardableResult func tagPassage(_ reference: ProjectTagReference, chapterID: UUID, range: NSRange, expectedText: String) -> Bool {
+        guard self.chapterID == chapterID, let view = textView as? ManuscriptTextView,
+              view.string == expectedText, range.length > 0, range.location >= 0,
+              NSMaxRange(range) <= view.string.utf16.count, Range(range, in: expectedText) != nil,
+              let storage = view.textStorage else { return false }
+        let tagged = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: range))
+        tagged.addAttribute(.link, value: reference.url, range: NSRange(location: 0, length: tagged.length))
+        guard view.replaceAttributedText(tagged, range: range) else { return false }
+        view.undoManager?.setActionName("Tag object")
+        refresh()
+        return true
     }
 
     func action(_ selector: Selector) {
@@ -394,6 +406,8 @@ struct RichTextEditor: NSViewRepresentable {
     private var typographyKey: String { "\(defaultFont)/\(defaultSize)/\(defaultSpacing)" }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
+        context.coordinator.updatingView = true
+        defer { context.coordinator.updatingView = false }
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.drawsBackground = false
         scroll.appearance = NSAppearance(named: .aqua)
@@ -426,7 +440,7 @@ struct RichTextEditor: NSViewRepresentable {
         names.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName, enabled: discoverNames); names.textChanged()
         view.onFocus = { [weak reviewFocus] in reviewFocus?.activate(nil) }
         controller.textView = view; controller.chapterID = chapter.id
-        DispatchQueue.main.async { controller.grammar = grammar; controller.tags = tags; controller.objectNames = names }
+        DispatchQueue.main.async { controller.grammar = grammar; controller.tags = tags; controller.objectNames = names; controller.refresh() }
         scroll.documentView = view
         view.selectionActions = SelectionQuickActionSession(view: view)
         view.setSelectedRange(NSRange(location: 0, length: 0))
@@ -443,6 +457,8 @@ struct RichTextEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let view = scroll.documentView as? NSTextView else { return }
+        context.coordinator.updatingView = true
+        defer { context.coordinator.updatingView = false }
         typingPreferences.apply(to: view)
         if let manuscript = view as? ManuscriptTextView {
             let paperMargins = PaperMargins(rawValue: margins) ?? .balanced
@@ -472,19 +488,21 @@ struct RichTextEditor: NSViewRepresentable {
         (view as? ManuscriptTextView)?.objectNames?.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName, enabled: discoverNames)
         (view as? ManuscriptTextView)?.onFocus = { [weak reviewFocus] in reviewFocus?.activate(nil) }
         controller.textView = view; controller.chapterID = chapter.id
-        let replacedText = context.coordinator.chapterID != chapter.id || context.coordinator.lastData != chapter.richText
+        let changedChapter = context.coordinator.chapterID != chapter.id
+        let replacedText = changedChapter || context.coordinator.lastData != chapter.richText
         context.coordinator.chapterID = chapter.id
         if replacedText {
             let selected = view.selectedRange()
             (view as? ManuscriptTextView)?.selectionActions?.close()
             (view as? ManuscriptTextView)?.tagSession?.close()
             view.textStorage?.setAttributedString(chapter.attributedText)
-            view.setSelectedRange(NSRange(location: min(selected.location, view.string.utf16.count), length: 0))
+            view.setSelectedRange(NSRange(location: changedChapter ? 0 : min(selected.location, view.string.utf16.count), length: 0))
             view.undoManager?.removeAllActions()
             context.coordinator.lastData = chapter.richText
             (view as? ManuscriptTextView)?.grammarSession?.textChanged(automatic: false)
             (view as? ManuscriptTextView)?.objectNames?.textChanged()
             (view as? ManuscriptTextView)?.pencilComments?.invalidate()
+            DispatchQueue.main.async { controller.refresh() }
         }
         (view as? ManuscriptTextView)?.selectionActions?.refreshContent()
         (view as? ManuscriptTextView)?.pencilComments?.update(chapter.comments ?? [], enabled: showPencilComments, change: { changeComment(chapter.id, $0, $1) })
@@ -524,6 +542,7 @@ struct RichTextEditor: NSViewRepresentable {
         var navigationToken: UUID?
         var chapterID: UUID
         var spellingLanguage: String?
+        var updatingView = false
         init(_ parent: RichTextEditor) { self.parent = parent; chapterID = parent.chapter.id }
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
@@ -537,6 +556,10 @@ struct RichTextEditor: NSViewRepresentable {
             (view as? ManuscriptTextView)?.objectNames?.textChanged()
         }
         func textViewDidChangeSelection(_ notification: Notification) {
+            if updatingView {
+                DispatchQueue.main.async { self.parent.controller.refresh() }
+                return
+            }
             parent.controller.refresh()
             (notification.object as? ManuscriptTextView)?.selectionActions?.selectionChanged()
             if let view = notification.object as? ManuscriptTextView, view.tagSession?.visible == true { view.tagSession?.refreshSuggestions() }

@@ -220,6 +220,9 @@ private struct SelectionQuickActionBubble: View {
             HStack(spacing: 10) {
                 let tags = session.tagCommands
                 if !tags.isEmpty { Menu { ContextCommandItems(commands: tags) } label: { Label("Tag", systemImage: "tag") } }
+                if let addObject = session.chapterCommands.first(where: { $0.title == "Add object…" }) {
+                    Button { addObject.action?() } label: { Label("Object", systemImage: "shippingbox") }.help("Add selected words as a World object")
+                }
                 if let continuity = session.chapterCommands.first(where: { $0.title == "Track a character change" }), let children = continuity.children, !children.isEmpty {
                     Menu { ContextCommandItems(commands: children) } label: { Label("Continuity", systemImage: "person.badge.clock") }
                 }

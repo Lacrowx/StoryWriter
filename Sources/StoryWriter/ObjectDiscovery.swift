@@ -69,7 +69,20 @@ extension ProjectStore {
     func createObject(named name: String, kind: NewObjectKind, projectID: UUID) -> ProjectTagReference? {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, let project = project(projectID) else { return nil }
-        if let existing = project.tagObjects.first(where: { ObjectDiscovery.key($0.title) == ObjectDiscovery.key(name) }) { return existing.reference }
+        if kind == .item {
+            var changed = project
+            do {
+                let object = try changed.addStoryObject(name: name)
+                update(projectID) { $0 = changed }
+                return ProjectTagReference(kind: .world, objectID: object.id)
+            } catch { errorMessage = error.localizedDescription; return nil }
+        }
+        let existing = project.tagObjects.filter { object in
+            let matchingKind = kind == .character ? object.reference.kind == .character : project.worldNotes.contains { $0.id == object.reference.objectID && $0.category == .location }
+            return matchingKind && ([object.title] + object.aliases).contains { ObjectDiscovery.key($0) == ObjectDiscovery.key(name) }
+        }
+        if existing.count == 1 { return existing[0].reference }
+        if existing.count > 1 { errorMessage = "Several objects use this name. Choose the intended object."; return nil }
         let reference: ProjectTagReference
         switch kind {
         case .character:

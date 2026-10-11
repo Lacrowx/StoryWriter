@@ -11,6 +11,7 @@ struct ContinuityRequest: Identifiable {
     var action: ContinuityAction = .learns
     var itemID: UUID?
     var parentID: UUID?
+    var worldObjectID: UUID?
 }
 
 struct ContinuityLibraryRequest: Identifiable {
@@ -35,6 +36,8 @@ struct ContinuityPanel: View {
     @State private var request: ContinuityRequest?
     @State private var library: ContinuityLibraryRequest?
     @State private var showFinished = false
+    @State private var selectedObjectID: UUID?
+    @State private var addObject: AddStoryObjectRequest?
 
     private func offset(_ chapter: Chapter) -> Int {
         editor.chapterID == chapter.id ? min(NSMaxRange(editor.selectionRange), chapter.plainText.utf16.count) : 0
@@ -65,7 +68,7 @@ struct ContinuityPanel: View {
                             if let personID, let person = project.characters.first(where: { $0.id == personID }) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(person.name).font(.title3)
-                                    Text("At your cursor").font(.caption).foregroundStyle(.secondary)
+                                    CursorPositionLabel(chapter: chapter, editor: editor)
                                     if pinnedCharacterID == nil && Continuity.viewpoint(in: chapter, offset: offset(chapter)) == nil {
                                         Text("No scene viewpoint set · showing the first character").font(.caption2).foregroundStyle(.secondary)
                                     }
@@ -92,12 +95,32 @@ struct ContinuityPanel: View {
                                 }
                             }
                         }
+                        Divider()
+                        HStack {
+                            Text("Objects").font(.headline)
+                            Spacer()
+                            Button { addObject = AddStoryObjectRequest(chapterID: chapter.id, range: editor.selectionRange, expectedText: chapter.plainText) } label: { Label("Add object", systemImage: "plus") }
+                                .font(.caption).disabled(editor.chapterID != chapter.id)
+                        }
+                        let objects = project.worldNotes.filter { $0.category == .object }
+                        if objects.isEmpty {
+                            Text("Select an object’s name in your writing and add it here. Then record who knows about it or carries it.").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Picker("Object", selection: $selectedObjectID) {
+                                Text("Choose an object").tag(UUID?.none)
+                                ForEach(objects) { Text($0.title).tag(Optional($0.id)) }
+                            }
+                            if let selectedObjectID, objects.contains(where: { $0.id == selectedObjectID }) {
+                                ObjectAwarenessView(projectID: projectID, worldID: selectedObjectID, chapterID: chapter.id, editor: editor)
+                            }
+                        }
                     }.padding(16)
                 }
             } else { Text("Choose a chapter to see continuity at your cursor.").foregroundStyle(.secondary).padding() }
         }
         .sheet(item: $request) { ContinuityRecordSheet(projectID: projectID, request: $0) }
         .sheet(item: $library) { ContinuityLibrarySheet(projectID: projectID, initialItemID: $0.itemID, chapterID: chapterID, editor: editor) }
+        .sheet(item: $addObject) { AddStoryObjectSheet(projectID: projectID, request: $0, editor: editor, added: { selectedObjectID = $0 }) }
     }
     @ViewBuilder private func snapshot(_ category: ContinuityCategory, states: [ContinuityState], project: StoryProject, chapter: Chapter, personID: UUID) -> some View {
         let rows = states.filter { $0.item.category == category && (showFinished || $0.latest.event.action.active) }
@@ -168,11 +191,11 @@ struct ContinuityRecordSheet: View {
                         Text("Choose a character").tag(UUID?.none)
                         ForEach(project.characters) { Text($0.name).tag(Optional($0.id)) }
                     }
-                    Picker("Add to", selection: $category) { ForEach(ContinuityCategory.allCases) { Text($0.label).tag($0) } }.disabled(request.itemID != nil)
+                    Picker("Add to", selection: $category) { ForEach(ContinuityCategory.allCases) { Text($0.label).tag($0) } }.disabled(request.itemID != nil || request.worldObjectID != nil)
                 }
                 if let parent = project.trackedContinuityItems.first(where: { $0.id == request.parentID }) { Text("New detail of \(parent.name)").font(.caption).foregroundStyle(.secondary) }
-                TextField("Find an existing item or name a new one", text: $query).textFieldStyle(.roundedBorder).disabled(request.itemID != nil)
-                if request.itemID == nil {
+                TextField("Find an existing item or name a new one", text: $query).textFieldStyle(.roundedBorder).disabled(request.itemID != nil || request.worldObjectID != nil)
+                if request.itemID == nil && request.worldObjectID == nil {
                     let choices = project.continuityChoices(for: category, parentID: request.parentID)
                     let matches = Continuity.matches(choices, query: query, category: category)
                     ScrollView {
@@ -229,10 +252,15 @@ struct ContinuityRecordSheet: View {
             let project = store.project(projectID)
             characterID = request.characterID ?? project?.characters.first?.id
             category = request.category; action = request.action; selectedID = request.itemID
-            query = project?.trackedContinuityItems.first { $0.id == request.itemID }?.name ?? ""
+            if let worldID = request.worldObjectID, let choice = project?.continuityChoices(for: category).first(where: { $0.worldObjectID == worldID }) {
+                selectedID = choice.id; query = choice.name
+            } else {
+                query = project?.trackedContinuityItems.first { $0.id == request.itemID }?.name ?? ""
+                if query.isEmpty, let range = Range(request.range, in: request.expectedText) { query = String(request.expectedText[range]).trimmingCharacters(in: .whitespacesAndNewlines) }
+            }
         }
         .onChange(of: query) { _, value in
-            if request.itemID == nil {
+            if request.itemID == nil && request.worldObjectID == nil {
                 selectedID = Continuity.exactMatch(store.project(projectID)?.continuityChoices(for: category, parentID: request.parentID) ?? [], name: value, category: category, parentID: request.parentID)?.id
                 creating = false; error = nil
             }

@@ -59,6 +59,25 @@ final class TypingBenchmarkTests: XCTestCase {
         let comment = try XCTUnwrap(typed.comments?.first)
         XCTAssertEqual((typed.plainText as NSString).substring(with: comment.range), comment.quote)
         XCTAssertLessThan(median, 100, "Typing has regressed to a visible lag") // Was ~800 ms before render throttling.
+        func command(_ title: String, in commands: [ContextCommand]) -> ContextCommand? {
+            for item in commands {
+                if item.title == title { return item }
+                if let children = item.children, let found = command(title, in: children) { return found }
+            }
+            return nil
+        }
+        let continuity = try XCTUnwrap(command("Continuity", in: view.appContextCommands()))
+        continuity.action?(); pump()
+        var sidebarSamples: [Double] = []
+        for character in " Writing with continuity open stays smooth." {
+            let start = CFAbsoluteTimeGetCurrent()
+            view.insertText(String(character), replacementRange: view.selectedRange()); pump(0.001)
+            sidebarSamples.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
+        }
+        sidebarSamples.sort()
+        let sidebarMedian = sidebarSamples[sidebarSamples.count / 2]
+        print(String(format: "Workspace keystroke with continuity open, 100k-word project: median %.2f ms, p90 %.2f ms", sidebarMedian, sidebarSamples[sidebarSamples.count * 9 / 10]))
+        XCTAssertLessThan(sidebarMedian, 100, "Continuity must not make typing visibly lag")
     }
 
     static func all<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
