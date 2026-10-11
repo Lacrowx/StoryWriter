@@ -20,7 +20,7 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
     var resetKeys: [String] {
         switch self {
         case .general: return ["resumeWorkspace", "startInFocusMode", "showChapterOutline", "showStatusInFocus", "selectionQuickActions"]
-        case .appearance: return ["appAppearance", "accentColor", "useTransparency", "paperTone", "paperTexture", "dimPaper", "readingWidth", "readingZoom", "paperMargins", "showPencilComments"]
+        case .appearance: return ["appAppearance", "accentColor", "useTransparency", "paperTone", "paperTexture", "dimPaper", "readingWidth", "readingZoom", "paperMargins", "showPencilComments", "showTagHighlights"]
         case .editor: return ["defaultFontName", "defaultFontSize", "defaultLineSpacing", "nativeSpellChecking", "nativeGrammarChecking", "automaticSpellingCorrection", "smartQuotes", "smartDashes", "detectWebLinks"]
         case .review: return []
         case .storage: return ["autosaveDelay", "revisionInterval", "backupInterval"]
@@ -173,6 +173,8 @@ private struct WritingReviewSettings: View {
     @AppStorage("writingLanguage") private var language = "auto"
     @AppStorage("reviewDelay") private var delay = 2.0
     @AppStorage("discoverObjectNames") private var names = true
+    @AppStorage("autoTagNames") private var autoTag = true
+    @AppStorage("completeNames") private var complete = true
     @ObservedObject private var service = LocalGrammarService.shared
     var body: some View {
         Section("Language & review") {
@@ -184,8 +186,12 @@ private struct WritingReviewSettings: View {
             Text("Automatic checks review the changed paragraph. Proposed AI edits require your acceptance. Set a project's AI writing brief in its Story tab or project menu.").settingsHint()
         }
         Section("Character & world names") {
+            Toggle("Tag known names as you type", isOn: $autoTag)
+            Text("Names and aliases are tagged when you finish typing them, spelled exactly as in their profile. Undo removes just the tag. Names shared by several entries stay untagged; use @ to choose.").settingsHint()
+            Toggle("Complete known names with Tab", isOn: $complete)
+            Text("After the first letters of a name, the rest appears in grey. Press Tab to finish and tag it, or keep typing.").settingsHint()
             Toggle("Suggest new characters and places while typing", isOn: $names)
-            Text("Local name recognition adds purple marks and a new-names button. You can still tag existing characters and world entries with @ when this is off.").settingsHint()
+            Text("Local name recognition adds purple marks and a new-names button.").settingsHint()
         }
         if service.backend == .osaurus {
             Section("Osaurus connection") {

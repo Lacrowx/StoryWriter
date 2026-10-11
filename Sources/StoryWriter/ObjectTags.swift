@@ -21,6 +21,13 @@ struct ProjectTagReference: Hashable, Identifiable {
     }
 }
 
+struct NameCompletion: Equatable {
+    var prefix: NSRange
+    var name: String
+    var object: TaggedProjectObject
+    var suffix: String { String(name.utf16.dropFirst(prefix.length)) ?? "" }
+}
+
 struct TaggedObjectDetail: Equatable, Identifiable {
     var title: String
     var text: String
@@ -100,6 +107,75 @@ enum ObjectTags {
         guard !query.contains(where: { $0.isNewline || ",.;:!?@)]}".contains($0) }) else { return nil }
         return range
     }
+    /// Characters that finish a word, so a name typed just before them is complete.
+    static func isNameBoundary(_ text: String) -> Bool {
+        guard text.count == 1, let character = text.first else { return false }
+        return character.isWhitespace || ".,;:!?)]}\"'”’»…—–".contains(character)
+    }
+
+    /// The known name, spelled exactly as in its profile, that ends just before `boundary`.
+    /// The longest name wins; a name shared by several objects is left for the writer to tag.
+    static func autoTagMatch(in text: NSAttributedString, boundary: Int, objects: [TaggedProjectObject]) -> (range: NSRange, object: TaggedProjectObject)? {
+        let source = text.string as NSString
+        guard boundary > 0, boundary < source.length, isNameBoundary(source.substring(with: NSRange(location: boundary, length: 1))) else { return nil }
+        var best: [(range: NSRange, object: TaggedProjectObject)] = []
+        for object in objects {
+            for name in nameChoices(object) {
+                let length = name.utf16.count
+                guard name.count >= 2, length <= boundary, !best.contains(where: { $0.range.length > length }) else { continue }
+                let range = NSRange(location: boundary - length, length: length)
+                guard source.substring(with: range) == name else { continue }
+                if range.location > 0 {
+                    let before = source.substring(with: source.rangeOfComposedCharacterSequence(at: range.location - 1))
+                    guard !before.contains(where: { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "@" }) else { continue }
+                }
+                if best.first.map({ $0.range.length < length }) == true { best = [] }
+                if !best.contains(where: { $0.object.reference == object.reference }) { best.append((range, object)) }
+            }
+        }
+        guard best.count == 1, let match = best.first else { return nil }
+        // Leave web links and other tags alone, and skip names that are already tagged.
+        var conflicting = false, alreadyTagged = true
+        text.enumerateAttribute(.link, in: match.range) { value, _, stop in
+            let reference = ProjectTagReference.from(value)
+            if value != nil && reference != match.object.reference { conflicting = true; stop.pointee = true }
+            if reference == nil { alreadyTagged = false }
+        }
+        return conflicting || alreadyTagged ? nil : match
+    }
+
+    /// The rest of a known name whose start the writer is typing at the end of a line.
+    /// The longest typed prefix decides; prefixes shared by several entries complete nothing.
+    static func completion(in text: String, caret: Int, objects: [TaggedProjectObject]) -> NameCompletion? {
+        let source = text as NSString
+        guard caret > 1, caret <= source.length else { return nil }
+        if caret < source.length, !CharacterSet.newlines.contains(Unicode.Scalar(source.character(at: caret)) ?? " ") { return nil }
+        func isWord(_ index: Int) -> Bool {
+            guard index >= 0, index < source.length, let scalar = Unicode.Scalar(source.character(at: index)) else { return false }
+            return CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
+        }
+        guard isWord(caret - 1) else { return nil }
+        let names = objects.flatMap { object in nameChoices(object).map { (name: $0, object: object) } }
+        var index = caret - 1
+        while index >= max(0, caret - 80) {
+            let scalar = Unicode.Scalar(source.character(at: index)) ?? " "
+            if CharacterSet.newlines.contains(scalar) { break }
+            if isWord(index) && !isWord(index - 1) && (index == 0 || source.character(at: index - 1) != 0x40) { // Not after @.
+                let prefix = NSRange(location: index, length: caret - index)
+                let typed = source.substring(with: prefix)
+                let matches = names.filter { $0.name.utf16.count > prefix.length && $0.name.hasPrefix(typed) }
+                if !matches.isEmpty {
+                    // A finished name, such as a first name, needs no further suggestion.
+                    guard prefix.length >= 2, Set(matches.map(\.object.reference)).count == 1, !names.contains(where: { $0.name == typed }),
+                          let shortest = matches.min(by: { $0.name.utf16.count < $1.name.utf16.count }) else { return nil }
+                    return NameCompletion(prefix: prefix, name: shortest.name, object: shortest.object)
+                }
+            }
+            index -= 1
+        }
+        return nil
+    }
+
     static func nameChoices(_ object: TaggedProjectObject) -> [String] {
         var names = [object.title] + object.aliases
         if object.reference.kind == .character, let first = object.title.split(whereSeparator: \.isWhitespace).first, first.count >= 2 {
@@ -155,6 +231,65 @@ enum ObjectTags {
     }
 }
 
+/// Draws tags as soft highlights tinted by kind, and web links with a thin
+/// underline, in place of AppKit's blue hyperlink styling.
+final class ManuscriptLayoutManager: NSLayoutManager {
+    var showsTags = true
+    struct TagHighlight: Equatable { var rect: NSRect; var kind: ProjectTagReference.Kind }
+
+    static func color(for kind: ProjectTagReference.Kind) -> NSColor {
+        kind == .character ? .systemIndigo : .systemTeal
+    }
+
+    /// One rectangle per line, fitted to the letters rather than the line spacing.
+    func tagHighlights(in characters: NSRange) -> [TagHighlight] {
+        var result: [TagHighlight] = []
+        guard showsTags else { return result }
+        enumerateLinks(in: characters) { range, value in
+            guard let tag = ProjectTagReference.from(value) else { return }
+            for rect in letterRects(for: range) { result.append(TagHighlight(rect: rect, kind: tag.kind)) }
+        }
+        return result
+    }
+
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        for highlight in tagHighlights(in: characters) {
+            let rect = highlight.rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -2, dy: 0)
+            Self.color(for: highlight.kind).withAlphaComponent(0.16).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+        }
+        enumerateLinks(in: characters) { range, value in
+            guard ProjectTagReference.from(value) == nil else { return }
+            NSColor.linkColor.withAlphaComponent(0.7).setFill()
+            for rect in letterRects(for: range) {
+                NSRect(x: rect.minX + origin.x, y: rect.maxY + origin.y - 1, width: rect.width, height: 1).fill()
+            }
+        }
+    }
+
+    private func enumerateLinks(in characters: NSRange, _ body: (NSRange, Any) -> Void) {
+        guard let storage = textStorage, NSMaxRange(characters) <= storage.length else { return }
+        storage.enumerateAttribute(.link, in: characters) { value, range, _ in if let value { body(range, value) } }
+    }
+
+    private func letterRects(for characters: NSRange) -> [NSRect] {
+        guard let storage = textStorage, let container = textContainers.first else { return [] }
+        let glyphs = glyphRange(forCharacterRange: characters, actualCharacterRange: nil)
+        var rects: [NSRect] = []
+        enumerateLineFragments(forGlyphRange: glyphs) { line, _, _, lineGlyphs, _ in
+            let part = NSIntersectionRange(glyphs, lineGlyphs)
+            guard part.length > 0 else { return }
+            let bounds = self.boundingRect(forGlyphRange: part, in: container)
+            let font = storage.attribute(.font, at: self.characterIndexForGlyph(at: part.location), effectiveRange: nil) as? NSFont ?? .systemFont(ofSize: 18)
+            let baseline = line.minY + self.location(forGlyphAt: part.location).y
+            rects.append(NSRect(x: bounds.minX, y: baseline - font.ascender - 1, width: bounds.width, height: font.ascender - font.descender + 2))
+        }
+        return rects
+    }
+}
+
 private struct TagObjectsKey: EnvironmentKey { static let defaultValue: [TaggedProjectObject] = [] }
 private struct OpenObjectTagKey: EnvironmentKey { static let defaultValue: (ProjectTagReference) -> Void = { _ in } }
 extension EnvironmentValues {
@@ -188,10 +323,37 @@ final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
     private(set) var detailsAnchor: NSRect?
     var detailsVisible: Bool { detailsPopup?.isShown == true }
     private(set) var inserting = false
+    var autoTagsNames = true
+    var completionsEnabled = true
+    private(set) var completion: NameCompletion? {
+        didSet { if completion != oldValue { view?.completionChanged(from: oldValue) } }
+    }
     var visible: Bool { popup?.isShown == true }
     init(view: ManuscriptTextView) { self.view = view; super.init() }
 
     func close() { popup?.close(); popup = nil; queryRange = nil; selectedLabel = nil; chosenReference = nil; closeDetails() }
+
+    /// Offers the rest of a known name as grey text that Tab accepts.
+    func refreshCompletion() {
+        guard completionsEnabled, !visible, !inserting, let view, !view.hasMarkedText(), view.selectedRange().length == 0 else { completion = nil; return }
+        completion = ObjectTags.completion(in: view.string, caret: view.selectedRange().location, objects: objects)
+    }
+    func dismissCompletion() { completion = nil }
+    @discardableResult func acceptCompletion() -> Bool {
+        guard let completion, let view, let storage = view.textStorage, NSMaxRange(completion.prefix) <= storage.length,
+              view.selectedRange() == NSRange(location: NSMaxRange(completion.prefix), length: 0),
+              objects.contains(where: { $0.reference == completion.object.reference }) else { self.completion = nil; return false }
+        let original = storage.attributedSubstring(from: completion.prefix)
+        let tagged = NSMutableAttributedString(attributedString: GrammarText.replacement(original, with: completion.name))
+        tagged.addAttribute(.link, value: completion.object.reference.url, range: NSRange(location: 0, length: tagged.length))
+        inserting = true; self.completion = nil
+        view.breakUndoCoalescing(); view.undoManager?.beginUndoGrouping()
+        let changed = view.replaceAttributedText(tagged, range: completion.prefix)
+        view.undoManager?.endUndoGrouping(); view.undoManager?.setActionName("Complete \(completion.name)")
+        view.breakUndoCoalescing()
+        inserting = false
+        return changed
+    }
     func closeDetails() {
         let popup = detailsPopup
         detailsPopup = nil; inspectedReference = nil; detailsAnchor = nil
@@ -356,6 +518,27 @@ final class ObjectTagSession: NSObject, ObservableObject, NSPopoverDelegate {
         inserting = false
         return changed
     }
+    /// Tags a known name the writer just finished typing, as its own undo step.
+    func autoTagName(endingAt boundary: Int) {
+        guard autoTagsNames, !inserting, !visible, let storage = view?.textStorage,
+              let match = ObjectTags.autoTagMatch(in: storage, boundary: boundary, objects: objects) else { return }
+        let name = (storage.string as NSString).substring(with: match.range)
+        // Apply after the keystroke's own editing and undo step have finished.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let view = self.view, let storage = view.textStorage, NSMaxRange(match.range) <= storage.length,
+                  (storage.string as NSString).substring(with: match.range) == name,
+                  self.objects.contains(where: { $0.reference == match.object.reference }) else { return }
+            let selection = view.selectedRanges
+            view.breakUndoCoalescing()
+            guard view.shouldChangeText(in: match.range, replacementString: nil) else { return }
+            storage.addAttribute(.link, value: match.object.reference.url, range: match.range)
+            view.didChangeText()
+            view.undoManager?.setActionName("Tag \(match.object.title)")
+            view.selectedRanges = selection
+            view.breakUndoCoalescing()
+        }
+    }
+
     func createNew(_ kind: NewObjectKind) {
         guard let name = newName, let range = queryRange, let view,
               NSMaxRange(range) <= view.string.utf16.count,
@@ -518,7 +701,7 @@ private struct ObjectTagDetailsBubble: View {
                 Text("This object is no longer in the project.")
                 Text("Your words are preserved. Use Remove tag from selection to unlink them.").font(.caption).foregroundStyle(.secondary)
             }
-            Text("Option-click tagged words to edit the text.").font(.caption2).foregroundStyle(.secondary)
+            Text("⌘-click any tag to see its details.").font(.caption2).foregroundStyle(.secondary)
         }.padding(18).frame(width: 340).tint(AppTheme.accent)
     }
     private func detailContent(_ object: TaggedProjectObject) -> some View {

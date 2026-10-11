@@ -86,8 +86,15 @@ enum GrammarText {
         }
     }
 
+    /// At least 8 characters once outer whitespace is trimmed, without counting the whole text.
+    static func hasReviewableText(_ text: String) -> Bool {
+        guard let first = text.firstIndex(where: { !$0.isWhitespace }),
+              let last = text.lastIndex(where: { !$0.isWhitespace }) else { return false }
+        return !text[first...last].dropFirst(7).isEmpty
+    }
+
     static func rebase(_ corrections: [LocatedCorrection], old: String, new: String) -> [LocatedCorrection] {
-        guard old != new else { return corrections }
+        guard !corrections.isEmpty, old != new else { return corrections }
         let oldChars = Array(old.utf16), newChars = Array(new.utf16)
         var prefix = 0
         while prefix < min(oldChars.count, newChars.count), oldChars[prefix] == newChars[prefix] { prefix += 1 }
@@ -262,6 +269,7 @@ final class InlineGrammarSession: NSObject, ObservableObject {
     private(set) var snapshot = ""
     private var task: Task<Void, Never>?
     private var applying = false
+    private var marksDrawn = true // Clear once in case marks were drawn before this session.
     private var popover: NSPopover?
     var popoverVisible: Bool { popover?.isShown == true }
     private var continuationTask: Task<Void, Never>?
@@ -307,7 +315,7 @@ final class InlineGrammarSession: NSObject, ObservableObject {
         guard !applying else { return }
         continuationTask?.cancel()
         task?.cancel(); checking = false; pending = false
-        if automatic && LocalGrammarService.shared.automatic && latest.trimmingCharacters(in: .whitespacesAndNewlines).count >= 8 {
+        if automatic && LocalGrammarService.shared.automatic && GrammarText.hasReviewableText(latest) {
             let selection = view.selectedRange()
             pending = true
             task = Task { [weak self] in
@@ -403,15 +411,21 @@ final class InlineGrammarSession: NSObject, ObservableObject {
         LocalGrammarService.shared.cachedResults[documentKey] = CachedGrammarResult(snapshot: snapshot, corrections: corrections, reviewed: reviewed, context: context)
         guard let view, let manager = view.layoutManager else { return }
         let range = NSRange(location: 0, length: view.string.utf16.count)
-        manager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: range)
-        manager.removeTemporaryAttribute(.underlineColor, forCharacterRange: range)
-        manager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: range)
+        // Clearing the whole chapter redraws all of it, so skip it while nothing is marked.
+        if marksDrawn {
+            manager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: range)
+            manager.removeTemporaryAttribute(.underlineColor, forCharacterRange: range)
+            manager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: range)
+            view.needsDisplay = true
+        }
+        marksDrawn = false
         for correction in corrections where NSMaxRange(correction.range) <= range.length {
             let color: NSColor = correction.issue.category == .style ? .systemBlue : .systemOrange
             manager.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue, .underlineColor: color, .backgroundColor: color.withAlphaComponent(0.08)], forCharacterRange: correction.range)
+            marksDrawn = true
         }
-        view.needsDisplay = true
-        view.objectNames?.drawMarks()
+        if marksDrawn { view.needsDisplay = true }
+        if view.objectNames?.drawMarks() == true { marksDrawn = true }
     }
 
     func correction(at point: NSPoint) -> LocatedCorrection? {

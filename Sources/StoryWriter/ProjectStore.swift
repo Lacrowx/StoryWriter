@@ -16,7 +16,11 @@ struct Revision: Identifiable {
 
 @MainActor
 final class ProjectStore: ObservableObject {
-    @Published var projects: [StoryProject] = []
+    var projects: [StoryProject] = [] {
+        willSet { if !typing { objectWillChange.send() } }
+    }
+    private var typing = false
+    private var typingRefresh: Task<Void, Never>?
     @Published var selectedProjectID: UUID? {
         didSet { workspacePreferences.projectID = selectedProjectID }
     }
@@ -86,13 +90,25 @@ final class ProjectStore: ObservableObject {
     func update(_ id: UUID, _ change: (inout StoryProject) -> Void) {
         guard let index = projects.firstIndex(where: { $0.id == id }) else { return }
         change(&projects[index]); projects[index].modifiedAt = Date()
-        dirty.insert(id); saveStatus = "Saving…"
+        dirty.insert(id); if saveStatus != "Saving…" { saveStatus = "Saving…" }
         saveTask?.cancel()
         let delay = ApplicationPreferences(defaults: workspaceDefaults).autosaveDelay
         saveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
             _ = self?.saveNow()
+        }
+    }
+
+    /// Keeps typed text current for saving, search, and export, but redraws the
+    /// views that depend on it once the writer pauses instead of on every key.
+    func updateWhileTyping(_ id: UUID, _ change: (inout StoryProject) -> Void) {
+        typing = true; update(id, change); typing = false
+        typingRefresh?.cancel()
+        typingRefresh = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            self?.objectWillChange.send()
         }
     }
 

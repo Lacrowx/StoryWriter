@@ -110,7 +110,7 @@ final class StoryToolsTests: XCTestCase {
         store.update(id) { $0.chapters[0] = chapter; $0.chapters.append(Chapter(title: "Other chapter")) }
         try store.namedCheckpoint(id, name: "Original")
         let revision = store.revisions(id).first!
-        store.update(id) { $0.chapters[0].plainText = "Changed."; $0.chapters[0].richText = Data() }
+        store.update(id) { $0.chapters[0].plainText = "Changed."; $0.chapters[0].richText = ChapterText() }
         let saved = try store.revisionProject(revision, projectID: id)
         try store.recoverChapter(saved.chapters[0], projectID: id)
         XCTAssertEqual(store.project(id)!.chapters[1].title, "Other chapter")

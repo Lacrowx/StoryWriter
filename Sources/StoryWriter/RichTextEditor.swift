@@ -15,7 +15,9 @@ final class EditorController: ObservableObject {
     @Published var alignment: NSTextAlignment = .left
     @Published var lineSpacing: CGFloat = 6
     @Published var selectionText = ""
-    @Published var selectionRange = NSRange(location: 0, length: 0)
+    /// Always current; views see caret moves once they settle, and new or cleared selections at once.
+    private(set) var selectionRange = NSRange(location: 0, length: 0)
+    private var selectionSettle: Task<Void, Never>?
     @Published var grammar: InlineGrammarSession?
     @Published var tags: ObjectTagSession?
     @Published var objectNames: ObjectNameSession?
@@ -24,22 +26,44 @@ final class EditorController: ObservableObject {
     func refresh() {
         guard let view = textView else { return }
         let range = view.selectedRange()
-        selectionRange = range
+        if selectionRange != range {
+            let selecting = range.length > 0 || selectionRange.length > 0
+            if selecting { objectWillChange.send() }
+            selectionRange = range
+            selectionSettle?.cancel()
+            if !selecting {
+                selectionSettle = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    guard !Task.isCancelled else { return }
+                    self?.objectWillChange.send()
+                }
+            }
+        }
         grammar?.selectionChanged()
         if NSMaxRange(range) <= (view.string as NSString).length {
-            selectionText = (view.string as NSString).substring(with: range)
-            selectionWords = selectionText.wordCount
+            let selected = (view.string as NSString).substring(with: range)
+            if selectionText != selected {
+                selectionText = selected
+                let words = selected.wordCount
+                if selectionWords != words { selectionWords = words }
+            }
         }
         let attributes = range.location < view.textStorage?.length ?? 0 ? view.textStorage?.attributes(at: range.location, effectiveRange: nil) ?? view.typingAttributes : view.typingAttributes
         if let font = attributes[.font] as? NSFont {
-            fontName = font.familyName ?? "Georgia"; fontSize = Double(font.pointSize)
+            let name = font.familyName ?? "Georgia", size = Double(font.pointSize)
+            if fontName != name { fontName = name }
+            if fontSize != size { fontSize = size }
             let traits = NSFontManager.shared.traits(of: font)
-            isBold = traits.contains(.boldFontMask); isItalic = traits.contains(.italicFontMask)
+            let bold = traits.contains(.boldFontMask), italic = traits.contains(.italicFontMask)
+            if isBold != bold { isBold = bold }
+            if isItalic != italic { isItalic = italic }
         }
-        isUnderlined = (attributes[.underlineStyle] as? Int ?? 0) != 0
+        let underlined = (attributes[.underlineStyle] as? Int ?? 0) != 0
+        if isUnderlined != underlined { isUnderlined = underlined }
         let paragraph = attributes[.paragraphStyle] as? NSParagraphStyle
-        alignment = paragraph?.alignment ?? .left
-        lineSpacing = paragraph?.lineSpacing ?? 6
+        let paragraphAlignment = paragraph?.alignment ?? .left, spacing = paragraph?.lineSpacing ?? 6
+        if alignment != paragraphAlignment { alignment = paragraphAlignment }
+        if lineSpacing != spacing { lineSpacing = spacing }
     }
 
     func selectionContainsAttribute(_ key: NSAttributedString.Key, matching: (Any) -> Bool = { _ in true }) -> Bool {
@@ -178,6 +202,26 @@ final class ManuscriptTextView: NSTextView {
         super.draw(dirtyRect)
         NSGraphicsContext.restoreGraphicsState()
         pencilComments?.draw(in: dirtyRect)
+        if let ghost = completionGhost() { ghost.text.draw(at: ghost.rect.origin) }
+    }
+    /// Grey remainder of a known name, drawn just after the caret.
+    private func completionGhost(for completion: NameCompletion? = nil) -> (text: NSAttributedString, rect: NSRect)? {
+        guard let completion = completion ?? tagSession?.completion, let manager = layoutManager, let storage = textStorage, let container = textContainer,
+              NSMaxRange(completion.prefix) <= storage.length, completion.prefix.length > 0 else { return nil }
+        let last = NSMaxRange(completion.prefix) - 1
+        let glyph = manager.glyphIndexForCharacter(at: last)
+        guard glyph < manager.numberOfGlyphs else { return nil }
+        let font = storage.attribute(.font, at: last, effectiveRange: nil) as? NSFont ?? .systemFont(ofSize: 18)
+        let text = NSAttributedString(string: completion.suffix, attributes: [.font: font, .foregroundColor: NSColor.labelColor.withAlphaComponent(0.35)])
+        let line = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let x = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).maxX
+        let baseline = line.minY + manager.location(forGlyphAt: glyph).y
+        let origin = NSPoint(x: x + textContainerOrigin.x, y: baseline - font.ascender + textContainerOrigin.y)
+        return (text, NSRect(origin: origin, size: text.size()).insetBy(dx: -2, dy: -2))
+    }
+    func completionChanged(from old: NameCompletion?) {
+        if let old, let rect = completionGhost(for: old)?.rect { setNeedsDisplay(rect) }
+        if let rect = completionGhost()?.rect { setNeedsDisplay(rect) }
     }
     var grammarSession: InlineGrammarSession?
     var tagSession: ObjectTagSession?
@@ -209,7 +253,7 @@ final class ManuscriptTextView: NSTextView {
     }
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
-        if result { onBlur?() }
+        if result { tagSession?.dismissCompletion(); onBlur?() }
         return result
     }
     @discardableResult func replaceAttributedText(_ replacement: NSAttributedString, range: NSRange) -> Bool {
@@ -227,9 +271,15 @@ final class ManuscriptTextView: NSTextView {
     }
 
     private var tagBoundaryEdit: (range: NSRange, reference: ProjectTagReference)?
+    private var typedNameBoundary: Int?
     override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
-        tagBoundaryEdit = nil
+        tagBoundaryEdit = nil; typedNameBoundary = nil
         let allowed = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+        // A single space or punctuation mark typed at the caret may complete a known name.
+        if allowed, affectedCharRange.length == 0, let replacementString, ObjectTags.isNameBoundary(replacementString),
+           undoManager?.isUndoing != true, undoManager?.isRedoing != true, !hasMarkedText() {
+            typedNameBoundary = affectedCharRange.location
+        }
         if allowed, tagSession?.inserting != true, affectedCharRange.length == 0, affectedCharRange.location > 0,
            let replacementString, !replacementString.isEmpty, let storage = textStorage,
            affectedCharRange.location <= storage.length,
@@ -251,7 +301,9 @@ final class ManuscriptTextView: NSTextView {
         }
         tagBoundaryEdit = nil
         pencilComments?.invalidate()
+        let boundary = typedNameBoundary; typedNameBoundary = nil
         super.didChangeText()
+        if let boundary { tagSession?.autoTagName(endingAt: boundary) }
     }
     override func mouseDown(with event: NSEvent) {
         selectionActions?.close()
@@ -260,7 +312,7 @@ final class ManuscriptTextView: NSTextView {
         objectNames?.close()
         if let session = grammarSession, let correction = session.correction(at: point) { session.show(correction); return }
         if let session = objectNames, let candidate = session.candidate(at: point) { session.show(candidate); return }
-        if !event.modifierFlags.contains(.option), event.clickCount == 1, let session = tagSession, session.showDetails(at: point) { return }
+        if event.modifierFlags.contains(.command), event.clickCount == 1, let session = tagSession, session.showDetails(at: point) { return }
         super.mouseDown(with: event)
         selectionActions?.selectionChanged()
     }
@@ -269,6 +321,10 @@ final class ManuscriptTextView: NSTextView {
         selectionActions?.close()
         if tagSession?.handleKey(event) == true { return }
         tagSession?.closeDetails()
+        if tagSession?.completion != nil, event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
+            if event.keyCode == 48, tagSession?.acceptCompletion() == true { return }
+            if event.keyCode == 53 { tagSession?.dismissCompletion(); return }
+        }
         super.keyDown(with: event)
     }
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -319,6 +375,9 @@ struct RichTextEditor: NSViewRepresentable {
     @AppStorage("defaultLineSpacing") private var defaultSpacing = 6.0
     @AppStorage("readingZoom") private var readingZoom = 1.0
     @AppStorage("dimPaper") private var dimPaper = false
+    @AppStorage("showTagHighlights") private var showTags = true
+    @AppStorage("autoTagNames") private var autoTagNames = true
+    @AppStorage("completeNames") private var completeNames = true
     @Environment(\.tagObjects) private var objects
     @Environment(\.openObjectTag) private var openTag
     @Environment(\.createProjectObject) private var createObject
@@ -338,7 +397,7 @@ struct RichTextEditor: NSViewRepresentable {
         scroll.scrollerStyle = .overlay
         scroll.allowsMagnification = true; scroll.minMagnification = 0.75; scroll.maxMagnification = 1.5
         let storage = NSTextStorage()
-        let manager = NSLayoutManager(); storage.addLayoutManager(manager)
+        let manager = ManuscriptLayoutManager(); manager.showsTags = showTags; storage.addLayoutManager(manager)
         let container = NSTextContainer(containerSize: NSSize(width: 700, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true; manager.addTextContainer(container)
         let view = ManuscriptTextView(frame: .zero, textContainer: container)
@@ -351,6 +410,7 @@ struct RichTextEditor: NSViewRepresentable {
         view.appearance = NSAppearance(named: .aqua)
         view.backgroundColor = ManuscriptPaper.color; view.insertionPointColor = .black; view.drawsBackground = false
         view.usesFontPanel = true; view.usesFindBar = true; view.isIncrementalSearchingEnabled = true
+        view.linkTextAttributes = [:] // Tags and links are drawn by ManuscriptLayoutManager.
         typingPreferences.apply(to: view)
         view.textStorage?.setAttributedString(chapter.attributedText); view.typingAttributes = WritingStyle.attributes
         context.coordinator.typographyKey = typographyKey
@@ -358,7 +418,7 @@ struct RichTextEditor: NSViewRepresentable {
         pencil.update(chapter.comments ?? [], enabled: showPencilComments, change: { changeComment(chapter.id, $0, $1) })
         view.delegate = context.coordinator; context.coordinator.lastData = chapter.richText
         let grammar = InlineGrammarSession(view: view, documentLabel: "chapter", documentKey: writingContext.storageKey("\(chapter.id.uuidString)/body"), context: writingContext); view.grammarSession = grammar; grammar.drawMarks()
-        let tags = ObjectTagSession(view: view); tags.objects = objects; tags.open = openTag; tags.create = createObject; tags.ignoreName = ignoreName; view.tagSession = tags
+        let tags = ObjectTagSession(view: view); tags.objects = objects; tags.open = openTag; tags.create = createObject; tags.ignoreName = ignoreName; tags.autoTagsNames = autoTagNames; tags.completionsEnabled = completeNames; view.tagSession = tags
         let names = ObjectNameSession(view: view); view.objectNames = names
         names.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName, enabled: discoverNames); names.textChanged()
         view.onFocus = { [weak reviewFocus] in reviewFocus?.activate(nil) }
@@ -382,9 +442,15 @@ struct RichTextEditor: NSViewRepresentable {
         guard let view = scroll.documentView as? NSTextView else { return }
         typingPreferences.apply(to: view)
         if let manuscript = view as? ManuscriptTextView {
-            manuscript.paperMargins = PaperMargins(rawValue: margins) ?? .balanced
-            manuscript.needsLayout = true
+            let paperMargins = PaperMargins(rawValue: margins) ?? .balanced
+            if manuscript.paperMargins != paperMargins {
+                manuscript.paperMargins = paperMargins
+                manuscript.needsLayout = true
+            }
             if !quickActions { manuscript.selectionActions?.close() }
+            if let manager = manuscript.layoutManager as? ManuscriptLayoutManager, manager.showsTags != showTags {
+                manager.showsTags = showTags; manuscript.needsDisplay = true
+            }
         }
         if context.coordinator.typographyKey != typographyKey {
             context.coordinator.typographyKey = typographyKey
@@ -398,10 +464,14 @@ struct RichTextEditor: NSViewRepresentable {
         (view as? ManuscriptTextView)?.tagSession?.open = openTag
         (view as? ManuscriptTextView)?.tagSession?.create = createObject
         (view as? ManuscriptTextView)?.tagSession?.ignoreName = ignoreName
+        (view as? ManuscriptTextView)?.tagSession?.autoTagsNames = autoTagNames
+        (view as? ManuscriptTextView)?.tagSession?.completionsEnabled = completeNames
         (view as? ManuscriptTextView)?.objectNames?.configure(objects: objects, ignored: ignoredNames, create: createObject, ignore: ignoreName, enabled: discoverNames)
         (view as? ManuscriptTextView)?.onFocus = { [weak reviewFocus] in reviewFocus?.activate(nil) }
         controller.textView = view; controller.chapterID = chapter.id
-        if context.coordinator.lastData != chapter.richText {
+        let replacedText = context.coordinator.chapterID != chapter.id || context.coordinator.lastData != chapter.richText
+        context.coordinator.chapterID = chapter.id
+        if replacedText {
             let selected = view.selectedRange()
             (view as? ManuscriptTextView)?.selectionActions?.close()
             (view as? ManuscriptTextView)?.tagSession?.close()
@@ -430,7 +500,9 @@ struct RichTextEditor: NSViewRepresentable {
         view.appearance = scroll.appearance
         view.insertionPointColor = dimPaper ? .white : .black
         // Display colors are temporary layout attributes, excluded from saved text and exports.
-        if let manager = view.layoutManager, let storage = view.textStorage {
+        if context.coordinator.displayedDimPaper != dimPaper || replacedText || dimPaper,
+           let manager = view.layoutManager, let storage = view.textStorage {
+            context.coordinator.displayedDimPaper = dimPaper
             let all = NSRange(location: 0, length: storage.length)
             manager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: all)
             if dimPaper {
@@ -446,38 +518,52 @@ struct RichTextEditor: NSViewRepresentable {
             context.coordinator.navigationToken = destination.token
             DispatchQueue.main.async { EditorNavigation.select(destination, in: view) }
         }
-        let checker = NSSpellChecker.shared
-        checker.automaticallyIdentifiesLanguages = language == "auto"
-        if language != "auto" { _ = checker.setLanguage(language == "de" ? "de_DE" : "en_US") }
+        if context.coordinator.spellingLanguage != language {
+            context.coordinator.spellingLanguage = language
+            let checker = NSSpellChecker.shared
+            checker.automaticallyIdentifiesLanguages = language == "auto"
+            if language != "auto" { _ = checker.setLanguage(language == "de" ? "de_DE" : "en_US") }
+        }
     }
 
     class Coordinator: NSObject, NSTextViewDelegate {
         var typographyKey = ""
         var parent: RichTextEditor
-        var lastData = Data()
+        var lastData = ChapterText()
         var navigationToken: UUID?
-        init(_ parent: RichTextEditor) { self.parent = parent }
+        var chapterID: UUID
+        var displayedDimPaper: Bool?
+        var spellingLanguage: String?
+        init(_ parent: RichTextEditor) { self.parent = parent; chapterID = parent.chapter.id }
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
-            do {
-                var changed = parent.chapter
-                try changed.setText(view.attributedString())
-                lastData = changed.richText; parent.chapter = changed
-                parent.controller.refresh()
-                (view as? ManuscriptTextView)?.grammarSession?.textChanged()
-                (view as? ManuscriptTextView)?.tagSession?.refreshSuggestions()
-                (view as? ManuscriptTextView)?.objectNames?.textChanged()
-            } catch { parent.onError("Could not preserve text formatting: \(error.localizedDescription)") }
+            var changed = parent.chapter
+            changed.setEditingText(view.attributedString())
+            lastData = changed.richText; parent.chapter = changed
+            parent.controller.refresh()
+            (view as? ManuscriptTextView)?.grammarSession?.textChanged()
+            (view as? ManuscriptTextView)?.tagSession?.refreshSuggestions()
+            (view as? ManuscriptTextView)?.tagSession?.refreshCompletion()
+            (view as? ManuscriptTextView)?.objectNames?.textChanged()
         }
         func textViewDidChangeSelection(_ notification: Notification) {
             parent.controller.refresh()
             (notification.object as? ManuscriptTextView)?.selectionActions?.selectionChanged()
             if let view = notification.object as? ManuscriptTextView, view.tagSession?.visible == true { view.tagSession?.refreshSuggestions() }
+            (notification.object as? ManuscriptTextView)?.tagSession?.refreshCompletion()
         }
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             guard ProjectTagReference.from(link) != nil else { return false }
-            if NSApp.currentEvent?.modifierFlags.contains(.option) == true { return true }
-            (textView as? ManuscriptTextView)?.tagSession?.showDetails(atCharacter: charIndex); return true
+            if NSApp.currentEvent?.modifierFlags.contains(.command) == true {
+                (textView as? ManuscriptTextView)?.tagSession?.showDetails(atCharacter: charIndex); return true
+            }
+            // Tagged words edit like ordinary prose; ⌘-click shows their details.
+            var caret = charIndex
+            if let event = NSApp.currentEvent, event.window === textView.window, event.type == .leftMouseUp || event.type == .leftMouseDown {
+                caret = textView.characterIndexForInsertion(at: textView.convert(event.locationInWindow, from: nil))
+            }
+            textView.setSelectedRange(NSRange(location: min(caret, textView.string.utf16.count), length: 0))
+            return true
         }
     }
 }
@@ -554,7 +640,7 @@ struct FormattingBar: View {
                 Button { link = ""; showLink = true } label: { Label("Add web link…", systemImage: "link") }.disabled(editor.selectionText.isEmpty)
                 Button("Remove web link") { editor.removeWebLinks() }.disabled(!editor.selectionContainsAttribute(.link, matching: { ProjectTagReference.from($0) == nil }))
             } label: { WriterMenuLabel(title: "Insert", symbol: "plus.circle", compact: compact, showsSymbol: false) }
-                .menuStyle(.borderlessButton).tint(.primary).fixedSize().help("Character and world tags, and web links · type @ to tag an object")
+                .menuStyle(.borderlessButton).tint(.primary).fixedSize().help("Character and world tags, and web links · known names are tagged as you type, or type @ to choose")
                 .popover(isPresented: $showLink) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Link selected text").font(.headline)

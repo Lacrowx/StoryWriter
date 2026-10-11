@@ -147,13 +147,17 @@ final class ObjectNameSession: ObservableObject {
             drawMarks()
         }
     }
-    func drawMarks() {
-        guard let view, snapshot == view.string, let manager = view.layoutManager else { return }
+    /// Returns whether any name was marked.
+    @discardableResult func drawMarks() -> Bool {
+        guard let view, !suggestions.isEmpty, snapshot == view.string, let manager = view.layoutManager else { return false }
+        var drawn = false
         for suggestion in suggestions where NSMaxRange(suggestion.range) <= view.string.utf16.count {
             if view.grammarSession?.corrections.contains(where: { NSIntersectionRange($0.range, suggestion.range).length > 0 }) == true { continue }
             manager.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDash.rawValue, .underlineColor: NSColor.systemPurple], forCharacterRange: suggestion.range)
+            drawn = true
         }
-        view.needsDisplay = true
+        if drawn { view.needsDisplay = true }
+        return drawn
     }
     func candidate(at point: NSPoint) -> ObjectNameSuggestion? {
         guard let view, snapshot == view.string, let manager = view.layoutManager, let container = view.textContainer else { return nil }
@@ -207,7 +211,7 @@ private struct ObjectNameCard: View {
                 Button { session.createObject(suggestion, kind: kind) } label: { Label("Create \(kind.rawValue.lowercased()): \(suggestion.name)", systemImage: kind.symbol).frame(maxWidth: .infinity, alignment: .leading) }
             }
             Button("Ignore this name in this project") { session.ignore(suggestion) }.buttonStyle(.plain).foregroundStyle(.secondary)
-            Text("Your prose stays unchanged. Recognition may miss invented names; use @ to add them manually.").font(.caption).foregroundStyle(.secondary)
+            Text("Your prose stays unchanged. Recognition may miss invented names; type @ to tag one manually.").font(.caption).foregroundStyle(.secondary)
         }.padding(20).frame(width: 340).tint(AppTheme.accent)
     }
 }

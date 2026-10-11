@@ -51,6 +51,7 @@ struct CharacterDetails: View {
                 SectionHeading(title: character.name, subtitle: "The person behind the part they play.")
                 VStack(spacing: 18) {
                     LabeledField("Name", text: $character.name)
+                        .renameMentions(projectID: projectID, reference: ProjectTagReference(kind: .character, objectID: character.id), names: [character.name] + (character.aliases ?? []))
                     HStack(alignment: .top, spacing: 18) { LabeledField("Role in the story", text: $character.role, placeholder: "Protagonist, rival, confidant…"); LabeledField("Pronouns", text: $character.pronouns) }
                     LabeledField("Aliases", text: Binding(get: { (character.aliases ?? []).joined(separator: ",") }, set: { character.aliases = $0.components(separatedBy: ",") }), placeholder: "First name, nickname, alternate spelling")
                 }.cardSurface()
@@ -119,6 +120,7 @@ struct WorldDetails: View {
                 SectionHeading(title: note.title, subtitle: "Build a setting that stays consistent from chapter to chapter.")
                 VStack(alignment: .leading, spacing: 18) {
                     LabeledField("Title", text: $note.title)
+                        .renameMentions(projectID: projectID, reference: ProjectTagReference(kind: .world, objectID: note.id), names: [note.title] + (note.aliases ?? []))
                     HStack { Picker("Category", selection: $note.category) { ForEach(WorldCategory.allCases) { Text($0.rawValue).tag($0) } }; Spacer() }
                     LabeledField("Aliases", text: Binding(get: { (note.aliases ?? []).joined(separator: ",") }, set: { note.aliases = $0.components(separatedBy: ",") }), placeholder: "Other names used in the manuscript")
                 }.cardSurface()

@@ -162,7 +162,7 @@ final class ObjectTagTests: XCTestCase {
         let trigger = (source as NSString).range(of: "@Co")
         XCTAssertNil(ObjectTags.existingMention(in: source, object: cole, beside: trigger))
     }
-    @MainActor func testClickOpensNearbyDetailsWithoutChangingProseOrSelection() throws {
+    @MainActor func testCommandClickOpensNearbyDetailsWithoutChangingProseOrSelection() throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 600, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
         let scroll = NSScrollView(frame: window.contentView!.bounds)
@@ -183,7 +183,7 @@ final class ObjectTagTests: XCTestCase {
         manager.ensureLayout(for: container)
         let bounds = manager.boundingRect(forGlyphRange: manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil), in: container)
         let point = NSPoint(x: bounds.minX + view.textContainerOrigin.x + 3, y: bounds.midY + view.textContainerOrigin.y)
-        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: view.convert(point, to: nil), modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: view.convert(point, to: nil), modifierFlags: [.command], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
         view.mouseDown(with: event)
         XCTAssertTrue(session.detailsVisible)
         XCTAssertEqual(session.inspectedReference, object.reference)
@@ -201,6 +201,48 @@ final class ObjectTagTests: XCTestCase {
         XCTAssertTrue(session.showDetails(atCharacter: range.location))
         view.insertText("!", replacementRange: NSRange(location: text.length, length: 0))
         XCTAssertFalse(session.detailsVisible, "Typing, pasting, and dictation must dismiss stale anchors")
+    }
+
+    @MainActor func testPlainClickOnTagPlacesCaretLikeOrdinaryText() throws {
+        let view = ManuscriptTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let session = ObjectTagSession(view: view); view.tagSession = session
+        let object = StoryProject.example().tagObjects[0]; session.objects = [object]
+        let text = NSMutableAttributedString(string: "She met Mara Vale at the shore.", attributes: WritingStyle.attributes)
+        let range = (text.string as NSString).range(of: "Mara Vale")
+        text.addAttribute(.link, value: object.reference.url, range: range)
+        view.textStorage?.setAttributedString(text)
+        let chapter = Chapter()
+        let editor = RichTextEditor(chapter: .constant(chapter), controller: EditorController(), language: "auto", onError: { _ in })
+        let coordinator = editor.makeCoordinator()
+        XCTAssertTrue(coordinator.textView(view, clickedOnLink: object.reference.url, at: range.location + 2))
+        XCTAssertEqual(view.selectedRange(), NSRange(location: range.location + 2, length: 0))
+        XCTAssertFalse(session.detailsVisible)
+        XCTAssertTrue(view.attributedString().isEqual(to: text))
+    }
+
+    @MainActor func testTagHighlightsHugEachLineOfAWrappedTag() throws {
+        let storage = NSTextStorage(), manager = ManuscriptLayoutManager()
+        storage.addLayoutManager(manager)
+        let container = NSTextContainer(containerSize: NSSize(width: 150, height: CGFloat.greatestFiniteMagnitude))
+        manager.addTextContainer(container)
+        let reference = ProjectTagReference(kind: .character, objectID: UUID())
+        let text = NSMutableAttributedString(string: "Then Annabelle Montgomery-Whitfield arrived.", attributes: WritingStyle.attributes)
+        let range = (text.string as NSString).range(of: "Annabelle Montgomery-Whitfield")
+        text.addAttribute(.link, value: reference.url, range: range)
+        text.addAttribute(.link, value: URL(string: "https://example.com")!, range: NSRange(location: 0, length: 4))
+        storage.setAttributedString(text)
+        manager.ensureLayout(for: container)
+        let highlights = manager.tagHighlights(in: NSRange(location: 0, length: text.length))
+        XCTAssertGreaterThanOrEqual(highlights.count, 2, "A wrapped tag gets one highlight per line")
+        XCTAssertTrue(highlights.allSatisfy { $0.kind == .character })
+        let font = try XCTUnwrap(text.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+        for highlight in highlights {
+            let line = manager.lineFragmentRect(forGlyphAt: manager.glyphIndex(for: highlight.rect.origin, in: container), effectiveRange: nil)
+            XCTAssertLessThan(highlight.rect.height, line.height, "Highlights fit the letters, not the line spacing")
+            XCTAssertGreaterThanOrEqual(highlight.rect.height, font.ascender - font.descender)
+        }
+        manager.showsTags = false
+        XCTAssertTrue(manager.tagHighlights(in: NSRange(location: 0, length: text.length)).isEmpty)
     }
 
     @MainActor func testWrappedAndMissingTagsRemainInspectable() throws {

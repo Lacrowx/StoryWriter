@@ -32,13 +32,32 @@ struct PassageEdit {
     var replacementLength: Int
     var delta: Int { replacementLength - range.length }
     init(old: String, new: String) {
-        let a = Array(old), b = Array(new)
+        // Compare code units, which is fast for long chapters, then widen the
+        // interval until both ends fall on whole characters in both texts.
+        let a = Array(old.utf16), b = Array(new.utf16)
+        let oldText = old as NSString, newText = new as NSString
         var prefix = 0, suffix = 0
         while prefix < min(a.count, b.count), a[prefix] == b[prefix] { prefix += 1 }
+        // Move the start back to the beginning of the character it falls in, in either text.
+        while true {
+            var start = prefix
+            if start < a.count { start = min(start, oldText.rangeOfComposedCharacterSequence(at: start).location) }
+            if start < b.count { start = min(start, newText.rangeOfComposedCharacterSequence(at: start).location) }
+            if start == prefix { break }
+            prefix = start
+        }
         while suffix < min(a.count, b.count) - prefix, a[a.count - 1 - suffix] == b[b.count - 1 - suffix] { suffix += 1 }
-        let offset = a.prefix(prefix).reduce(0) { $0 + String($1).utf16.count }
-        range = NSRange(location: offset, length: a[prefix..<(a.count - suffix)].reduce(0) { $0 + String($1).utf16.count })
-        replacementLength = b[prefix..<(b.count - suffix)].reduce(0) { $0 + String($1).utf16.count }
+        // Move the end forward to the end of the character it falls in, in either text.
+        while true {
+            var tail = suffix
+            let oldEnd = a.count - tail, newEnd = b.count - tail
+            if oldEnd > prefix, oldEnd < a.count { tail = min(tail, a.count - NSMaxRange(oldText.rangeOfComposedCharacterSequence(at: oldEnd - 1))) }
+            if newEnd > prefix, newEnd < b.count { tail = min(tail, b.count - NSMaxRange(newText.rangeOfComposedCharacterSequence(at: newEnd - 1))) }
+            if tail == suffix { break }
+            suffix = tail
+        }
+        range = NSRange(location: prefix, length: a.count - suffix - prefix)
+        replacementLength = b.count - suffix - prefix
     }
     func boundary(_ position: Int) -> Int {
         if position <= range.location { return position }
@@ -56,7 +75,7 @@ extension Chapter {
         return NSRange(location: scene.start, length: max(0, end - scene.start))
     }
     mutating func rebaseAnnotations(from old: String, to new: String) {
-        guard old != new else { return }
+        guard old != new, scenes?.isEmpty == false || comments?.isEmpty == false || continuityEvents?.isEmpty == false else { return }
         let edit = PassageEdit(old: old, new: new)
         if let events = continuityEvents { continuityEvents = Continuity.rebase(events, old: old, new: new) }
         if var entries = scenes {
@@ -137,7 +156,7 @@ extension Chapter {
         }
         // Validate serialization before replacing either text or its metadata.
         let data = try result.data(from: NSRange(location: 0, length: result.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd])
-        richText = data; plainText = result.string; scenes = entries; comments = mappedComments
+        richText = ChapterText(data: data); plainText = result.string; scenes = entries; comments = mappedComments
         continuityEvents = mappedEvents.isEmpty ? nil : mappedEvents
     }
     mutating func addComment(range: NSRange, note: String) throws {

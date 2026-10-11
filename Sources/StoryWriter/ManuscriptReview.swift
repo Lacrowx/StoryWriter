@@ -20,7 +20,7 @@ final class ManuscriptGrammarReview: ObservableObject {
     private var task: Task<Void, Never>?
     private var previousChapters: [Chapter] = []
     private var previousReports: [ChapterGrammarReport] = []
-    private var appliedData: [UUID: Data] = [:]
+    private var appliedData: [UUID: ChapterText] = [:]
     var correctionCount: Int { reports.reduce(0) { $0 + $1.corrections.count } }
 
     func review(_ project: StoryProject) {

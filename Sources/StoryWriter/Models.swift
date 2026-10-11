@@ -18,21 +18,30 @@ struct Chapter: Codable, Identifiable, Equatable {
     var title = "Untitled chapter"
     var synopsis = ""
     var status: DraftStatus = .planned
-    var richText = Data()
+    var richText = ChapterText()
     var plainText = ""
     var scenes: [StoryScene]?
     var comments: [PassageComment]?
     var continuityEvents: [ContinuityEvent]?
-    var wordCount: Int { plainText.wordCount }
+    var wordCount: Int { WordCountCache.shared.count(plainText, id: id) }
     var attributedText: NSAttributedString {
-        (try? NSAttributedString(data: richText, options: [.documentType: NSAttributedString.DocumentType.rtfd], documentAttributes: nil))
+        (try? richText.attributedText())
         ?? NSAttributedString(string: plainText, attributes: plainText.isEmpty ? WritingStyle.attributes : WritingStyle.legacyAttributes)
     }
     mutating func setText(_ text: NSAttributedString) throws {
         let data = try text.data(from: NSRange(location: 0, length: text.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd])
         rebaseAnnotations(from: plainText, to: text.string)
-        richText = data
+        richText = ChapterText(data: data)
         plainText = text.string
+    }
+    /// Keep edits current in the project without archiving the entire chapter per key.
+    mutating func setEditingText(_ text: NSAttributedString) {
+        richText = ChapterText(text: text)
+        // A native copy; a bridged one reads the editor's storage slowly, one character at a time.
+        var string = text.string
+        string.makeContiguousUTF8()
+        rebaseAnnotations(from: plainText, to: string)
+        plainText = string
     }
 }
 
@@ -159,10 +168,45 @@ enum WritingStyle {
 }
 
 extension String {
-    var wordCount: Int { split { $0.isWhitespace || $0 == "\u{FFFC}" }.filter { $0.contains(where: { $0.isLetter || $0.isNumber }) }.count }
+    /// Runs between whitespace and attachments that contain a letter or digit, counted in one pass.
+    var wordCount: Int {
+        var count = 0, inRun = false, runHasText = false
+        for scalar in unicodeScalars {
+            let separator: Bool, text: Bool
+            if scalar.isASCII {
+                let value = scalar.value
+                separator = value == 0x20 || (0x09...0x0D).contains(value)
+                text = (0x30...0x39).contains(value) || (0x41...0x5A).contains(value) || (0x61...0x7A).contains(value)
+            } else {
+                separator = scalar.properties.isWhitespace || scalar == "\u{FFFC}"
+                text = !separator && (scalar.properties.isAlphabetic || scalar.properties.numericType != nil)
+            }
+            if separator {
+                if inRun && runHasText { count += 1 }
+                inRun = false; runHasText = false
+            } else {
+                inRun = true; runHasText = runHasText || text
+            }
+        }
+        return inRun && runHasText ? count + 1 : count
+    }
     var safeFilename: String {
         let value = components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>\n\r")).joined(separator: "-").trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? "Untitled" : String(value.prefix(100))
     }
     var xmlEscaped: String { replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;").replacingOccurrences(of: "'", with: "&apos;") }
+}
+
+/// Chapter counts are read on every render; unchanged text matches its cached
+/// entry by identity, so only an edited chapter is counted again.
+final class WordCountCache: @unchecked Sendable {
+    static let shared = WordCountCache()
+    private let lock = NSLock()
+    private var entries: [UUID: (text: String, count: Int)] = [:]
+    func count(_ text: String, id: UUID) -> Int {
+        if let entry = lock.withLock({ entries[id] }), entry.text == text { return entry.count }
+        let count = text.wordCount
+        lock.withLock { entries[id] = (text, count) }
+        return count
+    }
 }

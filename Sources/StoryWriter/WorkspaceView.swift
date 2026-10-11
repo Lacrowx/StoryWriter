@@ -13,8 +13,11 @@ extension ProjectStore {
     func binding<Value>(_ id: UUID, _ keyPath: WritableKeyPath<StoryProject, Value>, fallback: Value) -> Binding<Value> {
         Binding(get: { self.project(id)?[keyPath: keyPath] ?? fallback }, set: { value in self.update(id) { $0[keyPath: keyPath] = value } })
     }
-    func itemBinding<Item: Identifiable>(_ projectID: UUID, _ keyPath: WritableKeyPath<StoryProject, [Item]>, id: UUID, fallback: Item) -> Binding<Item> where Item.ID == UUID {
-        Binding(get: { self.project(projectID)?[keyPath: keyPath].first { $0.id == id } ?? fallback }, set: { value in self.update(projectID) { project in if let index = project[keyPath: keyPath].firstIndex(where: { $0.id == id }) { project[keyPath: keyPath][index] = value } } })
+    func itemBinding<Item: Identifiable>(_ projectID: UUID, _ keyPath: WritableKeyPath<StoryProject, [Item]>, id: UUID, fallback: Item, whileTyping: Bool = false) -> Binding<Item> where Item.ID == UUID {
+        Binding(get: { self.project(projectID)?[keyPath: keyPath].first { $0.id == id } ?? fallback }, set: { value in
+            let change: (inout StoryProject) -> Void = { project in if let index = project[keyPath: keyPath].firstIndex(where: { $0.id == id }) { project[keyPath: keyPath][index] = value } }
+            if whileTyping { self.updateWhileTyping(projectID, change) } else { self.update(projectID, change) }
+        })
     }
 }
 
@@ -52,6 +55,7 @@ struct ProjectWorkspace: View {
     @AppStorage("readingZoom") private var readingZoom = 1.0
     @AppStorage("dimPaper") private var dimPaper = false
     @AppStorage("showPencilComments") private var showPencilComments = true
+    @AppStorage("showTagHighlights") private var showTagHighlights = true
 
     var body: some View {
         if let project = store.project(projectID) {
@@ -241,7 +245,8 @@ struct ProjectWorkspace: View {
                 }), .separator,
                 .button("Chapter outline", checked: showOutline) { showOutline.toggle() },
                 .button("Dim paper", checked: dimPaper) { dimPaper.toggle() },
-                .button("Pencil comments on page", checked: showPencilComments) { showPencilComments.toggle() }
+                .button("Pencil comments on page", checked: showPencilComments) { showPencilComments.toggle() },
+                .button("Tag highlights", checked: showTagHighlights) { showTagHighlights.toggle() }
             ]))
         }
         commands.append(.button("Search project…", symbol: "magnifyingglass") { showSearch = true })
@@ -382,7 +387,7 @@ struct ProjectWorkspace: View {
                     }.frame(height: 44).writerGlass(radius: 20)
                         .padding(.horizontal, 20).padding(.bottom, 14)
                     GeometryReader { geometry in
-                    EditorWithLanguage(chapter: store.itemBinding(projectID, \.chapters, id: chapter.id, fallback: chapter), controller: editor, onError: { store.errorMessage = $0 })
+                    EditorWithLanguage(chapter: store.itemBinding(projectID, \.chapters, id: chapter.id, fallback: chapter, whileTyping: true), controller: editor, onError: { store.errorMessage = $0 })
                         .environment(\.writingReviewContext, project.reviewContext(chapter: chapter)).id(chapter.id)
                         .frame(width: min(geometry.size.width, (ReadingWidth(rawValue: readingWidth) ?? .medium).points), height: geometry.size.height)
                         .background(ManuscriptPaper())

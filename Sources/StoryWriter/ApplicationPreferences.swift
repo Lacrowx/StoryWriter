@@ -80,12 +80,12 @@ struct TypingPreferences: DynamicProperty {
     @AppStorage("detectWebLinks") var links = true
 
     func apply(to view: NSTextView) {
-        view.isContinuousSpellCheckingEnabled = spelling
-        view.isGrammarCheckingEnabled = grammar
-        view.isAutomaticSpellingCorrectionEnabled = correction
-        view.isAutomaticQuoteSubstitutionEnabled = quotes
-        view.isAutomaticDashSubstitutionEnabled = dashes
-        view.isAutomaticLinkDetectionEnabled = links
+        if view.isContinuousSpellCheckingEnabled != spelling { view.isContinuousSpellCheckingEnabled = spelling }
+        if view.isGrammarCheckingEnabled != grammar { view.isGrammarCheckingEnabled = grammar }
+        if view.isAutomaticSpellingCorrectionEnabled != correction { view.isAutomaticSpellingCorrectionEnabled = correction }
+        if view.isAutomaticQuoteSubstitutionEnabled != quotes { view.isAutomaticQuoteSubstitutionEnabled = quotes }
+        if view.isAutomaticDashSubstitutionEnabled != dashes { view.isAutomaticDashSubstitutionEnabled = dashes }
+        if view.isAutomaticLinkDetectionEnabled != links { view.isAutomaticLinkDetectionEnabled = links }
     }
 }
 
