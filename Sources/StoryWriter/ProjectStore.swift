@@ -21,6 +21,8 @@ final class ProjectStore: ObservableObject {
     }
     private var typing = false
     private var typingRefresh: Task<Void, Never>?
+    private var mentionLinkTasks: [UUID: Task<Void, Never>] = [:]
+    private var pendingMentionLinks: [UUID: Set<ProjectTagReference>] = [:]
     @Published var selectedProjectID: UUID? {
         didSet { workspacePreferences.projectID = selectedProjectID }
     }
@@ -87,9 +89,32 @@ final class ProjectStore: ObservableObject {
         return packageURL(projectID).appendingPathComponent(path)
     }
 
-    func update(_ id: UUID, _ change: (inout StoryProject) -> Void) {
+    func update(_ id: UUID, linkMentions: Bool = true, _ change: (inout StoryProject) -> Void) {
         guard let index = projects.firstIndex(where: { $0.id == id }) else { return }
-        change(&projects[index]); projects[index].modifiedAt = Date()
+        let previousNames = linkMentions ? ObjectMentionLinker.names(in: projects[index]) : [:]
+        let previousReferences = linkMentions ? Set(projects[index].characters.map { ProjectTagReference(kind: .character, objectID: $0.id) }
+            + projects[index].worldNotes.map { ProjectTagReference(kind: .world, objectID: $0.id) }) : []
+        change(&projects[index])
+        if linkMentions {
+            let names = ObjectMentionLinker.names(in: projects[index])
+            let changed = Set(names.keys.filter { names[$0] != previousNames[$0] })
+            let created = changed.subtracting(previousReferences)
+            if !created.isEmpty { ObjectMentionLinker(names: names).link(in: &projects[index], references: created) }
+            let edited = changed.intersection(previousReferences)
+            if !edited.isEmpty {
+                pendingMentionLinks[id, default: []].formUnion(edited)
+                mentionLinkTasks[id]?.cancel()
+                mentionLinkTasks[id] = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    guard !Task.isCancelled else { return }
+                    self?.flushMentionLinks(id)
+                }
+            }
+        } else if !typing {
+            // Revision restoration must preserve its original links exactly.
+            mentionLinkTasks.removeValue(forKey: id)?.cancel(); pendingMentionLinks.removeValue(forKey: id)
+        }
+        projects[index].modifiedAt = Date()
         dirty.insert(id); if saveStatus != "Saving…" { saveStatus = "Saving…" }
         saveTask?.cancel()
         let delay = ApplicationPreferences(defaults: workspaceDefaults).autosaveDelay
@@ -100,10 +125,17 @@ final class ProjectStore: ObservableObject {
         }
     }
 
+    private func flushMentionLinks(_ id: UUID) {
+        mentionLinkTasks.removeValue(forKey: id)?.cancel()
+        guard let references = pendingMentionLinks.removeValue(forKey: id),
+              let index = projects.firstIndex(where: { $0.id == id }) else { return }
+        ObjectMentionLinker(names: ObjectMentionLinker.names(in: projects[index])).link(in: &projects[index], references: references)
+    }
+
     /// Keeps typed text current for saving, search, and export, but redraws the
     /// views that depend on it once the writer pauses instead of on every key.
     func updateWhileTyping(_ id: UUID, _ change: (inout StoryProject) -> Void) {
-        typing = true; update(id, change); typing = false
+        typing = true; update(id, linkMentions: false, change); typing = false
         typingRefresh?.cancel()
         typingRefresh = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 350_000_000)
@@ -121,6 +153,7 @@ final class ProjectStore: ObservableObject {
 
     @discardableResult func saveNow() -> Bool {
         saveTask?.cancel()
+        for id in Array(pendingMentionLinks.keys) { flushMentionLinks(id) }
         let hadChanges = !dirty.isEmpty
         var failed = false
         for id in Array(dirty) {
@@ -168,7 +201,7 @@ final class ProjectStore: ObservableObject {
             guard restored.id == projectID else { throw ProjectError.invalid("This revision belongs to a different project.") }
             guard saveNow() else { return }
             try checkpoint(projectID)
-            update(projectID) { $0 = restored }
+            update(projectID, linkMentions: false) { $0 = restored }
             _ = saveNow()
         } catch { errorMessage = error.localizedDescription }
     }

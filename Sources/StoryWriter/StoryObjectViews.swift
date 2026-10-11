@@ -40,8 +40,9 @@ struct AddStoryObjectSheet: View {
             Text("Keep this object in World and record who knows about it or carries it beside your writing.").font(.callout).foregroundStyle(.secondary)
             TextField("Object name", text: $name).textFieldStyle(.roundedBorder).focused($focused)
             TextField("Short description (optional)", text: $summary, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(2...4)
+            Text("Existing mentions of this name are linked across all chapters. Shared names and existing links are left as they are.").font(.caption).foregroundStyle(.secondary)
             if request.range.length > 0 {
-                Toggle("Link selected words to this object", isOn: $tagSelection)
+                Toggle("Link this selection even if it differs from the name", isOn: $tagSelection)
             }
             Text("Adding or mentioning an object does not give any character knowledge or possession. Record those changes explicitly.").font(.caption).foregroundStyle(.secondary)
             if let error { Text(error).font(.callout).foregroundStyle(.red) }
@@ -67,6 +68,7 @@ struct AddStoryObjectSheet: View {
             }
             let object = try project.addStoryObject(name: name, summary: summary)
             store.update(projectID) { $0 = project }
+            if let updated = store.project(projectID) { editor.linkExistingMentions(ProjectTagReference(kind: .world, objectID: object.id), in: updated) }
             if tagSelection && request.range.length > 0 {
                 _ = editor.tagPassage(ProjectTagReference(kind: .world, objectID: object.id), chapterID: request.chapterID, range: request.range, expectedText: request.expectedText)
             }

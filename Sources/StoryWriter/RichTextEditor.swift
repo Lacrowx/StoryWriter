@@ -108,6 +108,24 @@ final class EditorController: ObservableObject {
         return true
     }
 
+    /// Keep the live chapter in sync before @ creation or selection tagging saves it again.
+    func linkExistingMentions(_ reference: ProjectTagReference, in project: StoryProject) {
+        guard let chapterID, project.chapters.contains(where: { $0.id == chapterID }),
+              let view = textView as? ManuscriptTextView, let storage = view.textStorage else { return }
+        let matches = ObjectMentionLinker(names: ObjectMentionLinker.names(in: project)).matches(in: storage, references: [reference])
+        guard !matches.isEmpty else { return }
+        let selection = view.selectedRanges, typing = view.typingAttributes
+        view.breakUndoCoalescing(); view.undoManager?.beginUndoGrouping()
+        for match in matches {
+            let linked = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: match.range))
+            linked.addAttribute(.link, value: reference.url, range: NSRange(location: 0, length: linked.length))
+            _ = view.replaceAttributedText(linked, range: match.range)
+        }
+        view.selectedRanges = selection; view.typingAttributes = typing
+        view.undoManager?.setActionName("Link existing mentions"); view.undoManager?.endUndoGrouping()
+        refresh()
+    }
+
     func action(_ selector: Selector) {
         guard let view = textView else { return }
         view.window?.makeFirstResponder(view)
@@ -279,6 +297,37 @@ final class ManuscriptTextView: NSTextView {
         if ProjectTagReference.from(typing[.link]) != nil { typing.removeValue(forKey: .link) }
         typingAttributes = typing
         didChangeText()
+        return true
+    }
+
+    /// Apply profile-created tags without replacing prose or clearing the writer's undo history.
+    /// The model already contains these attributes, so no text-change notification is needed.
+    func mergeAddedObjectTags(from incoming: NSAttributedString) -> Bool {
+        guard let storage = textStorage, storage.string == incoming.string else { return false }
+        let existingProse = NSMutableAttributedString(attributedString: storage)
+        let incomingProse = NSMutableAttributedString(attributedString: incoming)
+        let full = NSRange(location: 0, length: storage.length)
+        existingProse.removeAttribute(.link, range: full); incomingProse.removeAttribute(.link, range: full)
+        guard existingProse.isEqual(to: incomingProse) else { return false }
+        var additions: [(NSRange, ProjectTagReference)] = [], valid = true
+        incoming.enumerateAttribute(.link, in: full) { value, range, _ in
+            storage.enumerateAttribute(.link, in: range) { old, part, _ in
+                let newReference = ProjectTagReference.from(value), oldReference = ProjectTagReference.from(old)
+                if oldReference != nil, oldReference == newReference { return }
+                if old == nil, value == nil { return }
+                if let old = old as? NSObject, let value = value as? NSObject, old.isEqual(value) { return }
+                if old == nil, let newReference { additions.append((part, newReference)) }
+                else { valid = false }
+            }
+        }
+        guard valid else { return false }
+        let selection = selectedRanges, typing = typingAttributes
+        breakUndoCoalescing(); undoManager?.beginUndoGrouping()
+        for (range, reference) in additions where shouldChangeText(in: range, replacementString: nil) {
+            storage.addAttribute(.link, value: reference.url, range: range)
+        }
+        selectedRanges = selection; typingAttributes = typing
+        undoManager?.setActionName("Link existing mentions"); undoManager?.endUndoGrouping()
         return true
     }
 
@@ -495,9 +544,12 @@ struct RichTextEditor: NSViewRepresentable {
             let selected = view.selectedRange()
             (view as? ManuscriptTextView)?.selectionActions?.close()
             (view as? ManuscriptTextView)?.tagSession?.close()
-            view.textStorage?.setAttributedString(chapter.attributedText)
-            view.setSelectedRange(NSRange(location: changedChapter ? 0 : min(selected.location, view.string.utf16.count), length: 0))
-            view.undoManager?.removeAllActions()
+            let incoming = chapter.attributedText
+            if changedChapter || (view as? ManuscriptTextView)?.mergeAddedObjectTags(from: incoming) != true {
+                view.textStorage?.setAttributedString(incoming)
+                view.setSelectedRange(NSRange(location: changedChapter ? 0 : min(selected.location, view.string.utf16.count), length: 0))
+                view.undoManager?.removeAllActions()
+            }
             context.coordinator.lastData = chapter.richText
             (view as? ManuscriptTextView)?.grammarSession?.textChanged(automatic: false)
             (view as? ManuscriptTextView)?.objectNames?.textChanged()

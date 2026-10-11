@@ -139,6 +139,7 @@ struct ProjectWorkspace: View {
             .environment(\.ignoreObjectName, { store.ignoreObjectName($0, projectID: projectID) })
             .environment(\.createProjectObject, { name, kind in
                 let reference = store.createObject(named: name, kind: kind, projectID: projectID)
+                if let reference, let updated = store.project(projectID) { editor.linkExistingMentions(reference, in: updated) }
                 if section == .manuscript, let reference { pinned = .object(reference); showPanel = true; panelTab = .research } else { taggedObject = reference }
                 return reference
             })
