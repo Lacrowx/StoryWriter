@@ -67,7 +67,7 @@ struct ManuscriptPaper: View {
     static let color = NSColor(srgbRed: 0.992, green: 0.981, blue: 0.956, alpha: 1)
 
     var body: some View {
-        Color(nsColor: dimPaper ? NSColor(srgbRed: 0.13, green: 0.14, blue: 0.15, alpha: 1) : Self.color)
+        Color(nsColor: dimPaper ? NSColor(srgbRed: 0.105, green: 0.115, blue: 0.13, alpha: 1) : Self.color)
             .overlay {
                 Canvas { context, size in
                     for row in stride(from: 0, to: Int(size.height), by: 6) {
@@ -80,5 +80,64 @@ struct ManuscriptPaper: View {
                     }
                 }.allowsHitTesting(false)
             }
+    }
+}
+
+
+/// Shared, understated surfaces for planning, research and utility sheets.
+private struct WriterCard: ViewModifier {
+    var inset: CGFloat
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        content.padding(inset)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.82), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.primary.opacity(scheme == .dark ? 0.10 : 0.06)))
+            .shadow(color: .black.opacity(scheme == .dark ? 0.08 : 0.025), radius: 8, y: 3)
+    }
+}
+
+extension View {
+    func cardSurface(inset: CGFloat = 20) -> some View { modifier(WriterCard(inset: inset)) }
+    func writerSheet() -> some View {
+        background(Color(nsColor: .windowBackgroundColor))
+            .controlSize(.regular)
+    }
+}
+
+struct WriterSearchField: View {
+    var title: String
+    @Binding var text: String
+    @FocusState private var focused: Bool
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField(title, text: $text).textFieldStyle(.plain).focused($focused)
+                .accessibilityLabel(title)
+            if !text.isEmpty {
+                Button { text = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    .buttonStyle(.plain).help("Clear search").accessibilityLabel("Clear search")
+            }
+        }.font(.system(size: 12)).padding(.horizontal, 10).padding(.vertical, 9)
+            .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(focused ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.07), lineWidth: focused ? 2 : 1))
+    }
+}
+
+struct WriterSymbol: View {
+    var name: String
+    var body: some View {
+        Image(systemName: name).font(.system(size: 15, weight: .medium))
+            .foregroundStyle(Color.accentColor).frame(width: 34, height: 34)
+            .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+            .accessibilityHidden(true)
+    }
+}
+
+struct WriterIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary).frame(width: 28, height: 28)
+            .background(.primary.opacity(configuration.isPressed ? 0.12 : 0.045), in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
     }
 }

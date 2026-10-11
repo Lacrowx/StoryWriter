@@ -57,7 +57,7 @@ struct ProjectWorkspace: View {
                 if !focusMode {
                     HStack(alignment: .center) {
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(project.title).font(.system(size: 23, weight: .medium, design: .serif)).lineLimit(1)
+                            Text(project.title).font(.system(size: 23, weight: .semibold)).lineLimit(1)
                             Text(project.kind == .story ? (project.genre.isEmpty ? "Make room for your imagination." : project.genre) : "Your ideas, gathered in one place.").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -68,18 +68,19 @@ struct ProjectWorkspace: View {
                         Menu {
                             ContextCommandItems(commands: menuContext(project).project)
                         } label: { WriterMenuLabel(title: "Project", symbol: "folder") }
-                            .menuStyle(.borderlessButton).fixedSize().help("Project details, revisions, backups, and portable copies")
+                            .menuStyle(.borderlessButton).tint(.primary).fixedSize().help("Project details, revisions, backups, and portable copies")
                     }.padding(.horizontal, 28).padding(.top, 18).padding(.bottom, 16)
                     if project.kind == .story {
-                        HStack(spacing: 3) {
+                        HStack(spacing: 4) {
                             ForEach(WorkspaceSection.allCases) { tab in
                                 Button { section = tab } label: {
                                     Label(tab.rawValue, systemImage: tab.symbol).font(.system(size: 12, weight: section == tab ? .semibold : .regular)).padding(.horizontal, 14).padding(.vertical, 9)
-                                        .foregroundStyle(section == tab ? Color.accentColor : .primary.opacity(0.7))
-                                        .background(section == tab ? Color.accentColor.opacity(0.14) : .clear, in: Capsule())
-                                }.buttonStyle(.plain)
+                                        .foregroundStyle(section == tab ? Color.primary : Color.secondary)
+                                        .background(section == tab ? Color(nsColor: .controlBackgroundColor) : .clear, in: Capsule())
+                                        .shadow(color: .black.opacity(section == tab ? 0.10 : 0), radius: 3, y: 1)
+                                }.buttonStyle(.plain).accessibilityAddTraits(section == tab ? .isSelected : [])
                             }
-                        }.padding(5).writerGlass(radius: 23)
+                        }.padding(4).writerGlass(radius: 23)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 24).padding(.bottom, 18)
                     }
@@ -87,7 +88,7 @@ struct ProjectWorkspace: View {
                 if section != .manuscript || project.kind == .research {
                     if let session = reviewFocus.session {
                         HStack(spacing: 12) { Text("Review: \(session.documentLabel)").font(.caption).foregroundStyle(.secondary); InlineGrammarBar(session: session) }.padding(.horizontal, 24)
-                    } else { Text("Select a field to review its writing.").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28).padding(.bottom, 8) }
+                    } else { EmptyView() }
                 }
                 Group {
                     if project.kind == .research { ReferencesView(projectID: projectID) }
@@ -368,8 +369,8 @@ struct ProjectWorkspace: View {
                                 FormattingBar(editor: editor, compact: geometry.size.width < 720)
                                 Menu {
                                     ContextCommandItems(commands: menuContext(project).display)
-                                } label: { WriterMenuLabel(title: "Display", symbol: "text.magnifyingglass") }.menuStyle(.borderlessButton).fixedSize().padding(.trailing, 16).help("Reading width, display zoom, and paper color")
-                            }.frame(minWidth: max(680, geometry.size.width))
+                                } label: { WriterMenuLabel(title: "Display", symbol: "text.magnifyingglass") }.menuStyle(.borderlessButton).tint(.primary).fixedSize().padding(.trailing, 16).help("Reading width, display zoom, and paper color")
+                            }.frame(minWidth: max(geometry.size.width < 720 ? 460 : 680, geometry.size.width))
                         }
                     }.frame(height: 44).writerGlass(radius: 20)
                         .padding(.horizontal, 20).padding(.bottom, 14)
@@ -378,8 +379,8 @@ struct ProjectWorkspace: View {
                         .environment(\.writingReviewContext, project.reviewContext(chapter: chapter)).id(chapter.id)
                         .frame(width: min(geometry.size.width, (ReadingWidth(rawValue: readingWidth) ?? .medium).points), height: geometry.size.height)
                         .background(ManuscriptPaper())
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.white.opacity(dimPaper ? 0.12 : 0.7), lineWidth: 0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(dimPaper ? 0.12 : 0.7), lineWidth: 0.5))
                         .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 9)
                         .frame(maxWidth: .infinity, alignment: .center)
                     }.padding(.horizontal, 20).padding(.bottom, 14)
@@ -400,7 +401,7 @@ struct ProjectWorkspace: View {
                                 } label: { Label(status.rawValue, systemImage: chapter.status == status ? "checkmark" : status.symbol) }
                             }
                         } label: { Label(chapter.status.rawValue, systemImage: chapter.status.symbol).foregroundStyle(chapter.status.color) }
-                            .menuStyle(.borderlessButton).fixedSize().help("Change chapter status")
+                            .menuStyle(.borderlessButton).tint(.primary).fixedSize().help("Change chapter status")
                     }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 28).padding(.vertical, 10)
                 }.frame(maxWidth: .infinity)
                 if showProofreader { Divider(); ProofreadingPanel(editor: editor, chapter: chapter) }
@@ -428,7 +429,7 @@ struct ProjectWorkspace: View {
                                 symbol: focusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                                 active: focusMode, compact: compact)
             }.help("Focus mode · ⇧⌘F")
-        }.menuStyle(.borderlessButton).buttonStyle(.plain).fixedSize()
+        }.menuStyle(.borderlessButton).tint(.primary).buttonStyle(.plain).fixedSize()
             .padding(.horizontal, 10).padding(.vertical, 7).writerGlass(radius: 16)
     }
 
@@ -491,16 +492,9 @@ struct ChapterOutline: View {
             HStack {
                 Text("CHAPTERS").font(.system(size: 10, weight: .semibold)).tracking(1.3).foregroundStyle(.secondary)
                 Spacer()
-                Menu { Button("Add chapter", action: add); Button("Import chapter…") { Panels.importChapter(projectID, store: store) } } label: { Image(systemName: "plus") }.menuStyle(.borderlessButton).frame(width: 20).help("Add or import a chapter")
+                Menu { Button("Add chapter", action: add); Button("Import chapter…") { Panels.importChapter(projectID, store: store) } } label: { Image(systemName: "plus") }.menuStyle(.borderlessButton).tint(.primary).frame(width: 20).help("Add or import a chapter")
             }.padding(18)
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Find in manuscript", text: $search).textFieldStyle(.plain)
-                if !search.isEmpty {
-                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .buttonStyle(.plain).help("Clear manuscript search").accessibilityLabel("Clear manuscript search")
-                }
-            }.font(.caption).padding(10).background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+            WriterSearchField(title: "Find in manuscript", text: $search)
                 .padding(.horizontal, 12).padding(.bottom, 10)
             if let project = store.project(projectID) {
                 Menu {
@@ -517,7 +511,7 @@ struct ChapterOutline: View {
                         Spacer()
                         Text(project.chapters.filter { statusFilter == nil || $0.status == statusFilter }.count.formatted()).foregroundStyle(.secondary)
                     }.font(.caption)
-                }.menuStyle(.borderlessButton).padding(.horizontal, 18).padding(.bottom, 10).help("Filter chapters by drafting status")
+                }.menuStyle(.borderlessButton).tint(.primary).padding(.horizontal, 18).padding(.bottom, 10).help("Filter chapters by drafting status")
                 if !query.isEmpty {
                     let results = StorySearch.results(in: project, query: query, manuscriptOnly: true).filter { result in
                         statusFilter == nil || project.chapters.first(where: { $0.id == result.destination.itemID })?.status == statusFilter
@@ -623,13 +617,13 @@ struct ExportSheet: View {
     @State private var exporting = false
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Label("Ready to share", systemImage: "square.and.arrow.up").font(.system(size: 25, weight: .medium, design: .serif))
+            Label("Ready to share", systemImage: "square.and.arrow.up").font(.system(size: 25, weight: .semibold))
             Text("Export a clean manuscript. Planning notes and references stay in your project.").foregroundStyle(.secondary)
             Picker("Include", selection: $scope) { Text("Whole story").tag("story"); Text("Current chapter").tag("chapter") }.pickerStyle(.segmented).disabled(chapterID == nil)
             Picker("Format", selection: $format) { ForEach(ExportFormat.allCases) { Text("\($0.rawValue) (.\($0.fileExtension))").tag($0) } }
             Text(format.explanation).font(.callout).foregroundStyle(.secondary).frame(height: 45, alignment: .top)
             HStack { Spacer(); Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction); Button(exporting ? "Exporting…" : "Export…", action: export).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(exporting) }
-        }.padding(30).frame(width: 490)
+        }.padding(30).frame(width: 490).writerSheet()
     }
     private func export() {
         guard let project = store.project(projectID) else { return }
@@ -647,13 +641,13 @@ struct ExportSheet: View {
 struct SectionHeading: View {
     var title: String
     var subtitle: String
-    var body: some View { VStack(alignment: .leading, spacing: 7) { Text(title).font(.system(size: 26, weight: .medium, design: .serif)); Text(subtitle).font(.callout).foregroundStyle(.secondary) } }
+    var body: some View { VStack(alignment: .leading, spacing: 7) { Text(title).font(.system(size: 25, weight: .semibold)); Text(subtitle).font(.callout).foregroundStyle(.secondary) } }
 }
 struct MetricCard: View {
     var value: String
     var label: String
     var symbol: String
-    var body: some View { VStack(alignment: .leading, spacing: 12) { Image(systemName: symbol).foregroundStyle(Color.accentColor); Text(value).font(.system(size: 26, weight: .medium, design: .serif)); Text(label).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading).cardSurface() }
+    var body: some View { VStack(alignment: .leading, spacing: 12) { Image(systemName: symbol).foregroundStyle(Color.accentColor); Text(value).font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit(); Text(label).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading).cardSurface() }
 }
 struct LabeledField: View {
     var title: String
@@ -663,7 +657,7 @@ struct LabeledField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.system(size: 12, weight: .semibold))
-            WritingTextArea(text: $text, height: 30, label: title.lowercased(), compact: true)
+            WritingTextArea(text: $text, height: 34, label: title.lowercased(), compact: true)
                 .overlay(alignment: .topLeading) { if text.isEmpty && !placeholder.isEmpty { Text(placeholder).font(.system(size: 14)).foregroundStyle(.tertiary).padding(.leading, 12).padding(.top, 8).allowsHitTesting(false) } }
         }.frame(maxWidth: .infinity, alignment: .leading).id(title.lowercased())
     }
@@ -679,15 +673,12 @@ struct NoteField: View {
             Text(title).font(.system(size: 13, weight: .semibold))
             Text(hint).font(.caption).foregroundStyle(.secondary)
             WritingTextArea(text: $text, height: height, label: title.lowercased())
-        }.frame(maxWidth: .infinity, alignment: .leading).id(title.lowercased())
+        }.frame(maxWidth: .infinity, alignment: .leading).cardSurface().id(title.lowercased())
     }
 }
 struct EmptyWorkspace: View {
     var symbol: String, title: String, subtitle: String, action: String
     var perform: () -> Void
-    var body: some View { VStack(spacing: 15) { Image(systemName: symbol).font(.system(size: 40)).foregroundStyle(Color.accentColor); Text(title).font(.system(size: 23, weight: .medium, design: .serif)); Text(subtitle).foregroundStyle(.secondary).multilineTextAlignment(.center); Button(action, action: perform).buttonStyle(.borderedProminent) }.padding(35).frame(maxWidth: .infinity, maxHeight: .infinity) }
-}
-extension View {
-    func cardSurface() -> some View { padding(20).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.primary.opacity(0.06))) }
+    var body: some View { VStack(spacing: 15) { Image(systemName: symbol).font(.system(size: 40)).foregroundStyle(Color.accentColor); Text(title).font(.system(size: 23, weight: .semibold)); Text(subtitle).foregroundStyle(.secondary).multilineTextAlignment(.center); Button(action, action: perform).buttonStyle(.borderedProminent) }.padding(35).frame(maxWidth: .infinity, maxHeight: .infinity) }
 }
 

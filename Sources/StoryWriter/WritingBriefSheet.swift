@@ -20,6 +20,6 @@ struct WritingBriefSheet: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Save brief") { store.update(projectID) { $0.aiWritingBrief = brief }; dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }
-        }.padding(28).frame(width: 690)
+        }.padding(28).frame(width: 690).writerSheet()
     }
 }

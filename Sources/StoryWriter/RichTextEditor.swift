@@ -482,7 +482,7 @@ struct FormattingBar: View {
                 Divider()
                 Button("All fonts…") { editor.textView?.window?.makeFirstResponder(editor.textView); NSFontManager.shared.orderFrontFontPanel(nil) }
             } label: { Text(editor.fontName).lineLimit(1).frame(width: 92, alignment: .leading) }
-            .menuStyle(.borderlessButton).help("Font family")
+            .menuStyle(.borderlessButton).tint(.primary).help("Font family")
             Stepper(value: Binding(get: { editor.fontSize }, set: { editor.setFont(size: $0) }), in: 8...72, step: 1) { Text("\(Int(editor.fontSize))").monospacedDigit().frame(width: 24) }
                 .frame(width: 66).help("Font size").accessibilityLabel("Font size")
             Divider().frame(height: 18)
@@ -497,7 +497,7 @@ struct FormattingBar: View {
                 Button("Heading 2") { editor.setFont(name: "Georgia-Bold", size: 24) }
                 Button("Caption") { editor.setFont(name: "Helvetica", size: 12) }
             } label: { WriterMenuLabel(title: "Style", symbol: "textformat.size", compact: compact, showsSymbol: false) }
-                .menuStyle(.borderlessButton).fixedSize().help("Body text, headings, and captions")
+                .menuStyle(.borderlessButton).tint(.primary).fixedSize().help("Body text, headings, and captions")
             Menu {
                 Menu("Alignment") {
                     alignmentButton("Left", value: .left, selector: #selector(NSTextView.alignLeft(_:)))
@@ -514,7 +514,7 @@ struct FormattingBar: View {
                 Button { editor.bulletList() } label: { Label("Bulleted list", systemImage: "list.bullet") }
                 Button { editor.bulletList(numbered: true) } label: { Label("Numbered list", systemImage: "list.number") }
             } label: { WriterMenuLabel(title: "Paragraph", symbol: "text.alignleft", compact: compact, showsSymbol: false) }
-                .menuStyle(.borderlessButton).fixedSize().help("Alignment, spacing, and lists")
+                .menuStyle(.borderlessButton).tint(.primary).fixedSize().help("Alignment, spacing, and lists")
             Divider().frame(height: 18)
             Menu {
                 Menu("Character & world tag") {
@@ -532,7 +532,7 @@ struct FormattingBar: View {
                 Button { link = ""; showLink = true } label: { Label("Add web link…", systemImage: "link") }.disabled(editor.selectionText.isEmpty)
                 Button("Remove web link") { editor.removeWebLinks() }.disabled(!editor.selectionContainsAttribute(.link, matching: { ProjectTagReference.from($0) == nil }))
             } label: { WriterMenuLabel(title: "Insert", symbol: "plus.circle", compact: compact, showsSymbol: false) }
-                .menuStyle(.borderlessButton).fixedSize().help("Character and world tags, and web links · type @ to tag an object")
+                .menuStyle(.borderlessButton).tint(.primary).fixedSize().help("Character and world tags, and web links · type @ to tag an object")
                 .popover(isPresented: $showLink) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Link selected text").font(.headline)
@@ -555,7 +555,7 @@ struct FormattingBar: View {
                 Button { editor.setAttributes([.backgroundColor: NSColor.systemYellow.withAlphaComponent(0.45)]) } label: { Label("Highlight", systemImage: "highlighter") }
                 Button("Remove highlight") { editor.setAttributes([.backgroundColor: NSColor.clear]) }.disabled(!editor.selectionContainsAttribute(.backgroundColor, matching: { (($0 as? NSColor)?.alphaComponent ?? 0) > 0 }))
             } label: { WriterMenuLabel(title: "Format", symbol: "paintbrush", compact: compact, showsSymbol: false) }
-                .menuStyle(.borderlessButton).fixedSize().help("Strikethrough, text color, and highlighting")
+                .menuStyle(.borderlessButton).tint(.primary).fixedSize().help("Strikethrough, text color, and highlighting")
             Spacer(minLength: 0)
             Button { editor.find() } label: { Image(systemName: "magnifyingglass").frame(width: 24, height: 24) }
                 .buttonStyle(.plain).help("Find in chapter · ⌘F").accessibilityLabel("Find in chapter")

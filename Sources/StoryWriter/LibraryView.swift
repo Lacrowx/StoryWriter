@@ -12,17 +12,10 @@ struct LibraryView: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "book.pages").font(.system(size: 24)).foregroundStyle(Color.accentColor)
-                    VStack(alignment: .leading, spacing: 3) { Text("StoryWriter").font(.system(size: 19, weight: .semibold, design: .serif)); Text("A home for your stories").font(.caption).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading, spacing: 3) { Text("StoryWriter").font(.system(size: 19, weight: .semibold)); Text("A home for your stories").font(.caption).foregroundStyle(.secondary) }
                 }.padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 24)
-                HStack {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search library", text: $store.search).textFieldStyle(.plain)
-                    if !store.search.isEmpty {
-                        Button { store.search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                            .buttonStyle(.plain).help("Clear library search").accessibilityLabel("Clear library search")
-                    }
-                }
-                    .padding(.horizontal, 12).padding(.vertical, 10).writerGlass(radius: 14).padding(.horizontal, 16).padding(.bottom, 20)
+                WriterSearchField(title: "Search library", text: $store.search)
+                    .padding(.horizontal, 16).padding(.bottom, 20)
                 HStack {
                     Text(store.showArchived ? "ARCHIVED" : "YOUR LIBRARY").font(.system(size: 10, weight: .semibold)).tracking(1.4).foregroundStyle(.secondary)
                     Spacer()
@@ -30,7 +23,7 @@ struct LibraryView: View {
                         Button("New story") { newKind = .story }
                         Button("New reference collection") { newKind = .research }
                         Divider(); Button("Open project…") { Panels.openProject(store) }
-                    } label: { Image(systemName: "plus") }.menuStyle(.borderlessButton).frame(width: 20).help("Create or open a project")
+                    } label: { Image(systemName: "plus") }.menuStyle(.borderlessButton).tint(.primary).frame(width: 20).help("Create or open a project")
                 }.padding(.horizontal, 20).padding(.bottom, 6)
                 List(selection: $store.selectedProjectID) {
                     ForEach(store.visibleProjects) { project in
@@ -99,7 +92,7 @@ struct ProjectRow: View {
     var project: StoryProject
     var body: some View {
         HStack(alignment: .top, spacing: 11) {
-            Image(systemName: project.kind.symbol).font(.system(size: 17)).foregroundStyle(Color.accentColor).frame(width: 24).padding(.top, 3)
+            WriterSymbol(name: project.kind.symbol)
             VStack(alignment: .leading, spacing: 5) {
                 Text(project.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
                 Text(project.kind == .story ? "\(project.chapters.count) \(project.chapters.count == 1 ? "chapter" : "chapters") · \(project.wordCount.formatted()) words" : "\(project.sources.count) \(project.sources.count == 1 ? "reference" : "references")").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -122,11 +115,11 @@ struct NewProjectSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Image(systemName: kind.symbol).font(.system(size: 32)).foregroundStyle(Color.accentColor)
-            Text(kind == .story ? "A new story" : "A new reference collection").font(.system(size: 25, weight: .medium, design: .serif))
+            Text(kind == .story ? "A new story" : "A new reference collection").font(.system(size: 25, weight: .semibold))
             Text(kind == .story ? "A place for your manuscript, characters, world, and research." : "Keep images, documents, web links, audio, and video together. You can collect sources without starting a story.").foregroundStyle(.secondary)
             TextField(kind == .story ? "Story title" : "Collection name", text: $title).textFieldStyle(.roundedBorder).focused($focused).onSubmit(create)
             HStack { Spacer(); Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction); Button("Create", action: create).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
-        }.padding(30).frame(width: 450).onAppear { focused = true }
+        }.padding(30).frame(width: 450).writerSheet().onAppear { focused = true }
     }
     private func create() { _ = store.create(title: title, kind: kind); dismiss() }
 }

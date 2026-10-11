@@ -487,12 +487,12 @@ struct InlineGrammarBar: View {
                 ForEach(GrammarScope.allCases) { scope in Button("Review \(scope.rawValue.lowercased())") { session.review(scope) } }
                 if session.checking { Divider(); Button("Cancel check") { session.cancel() } }
                 if let message = session.message { Divider(); Text(message) }
-            } label: { Text("Review") }.menuStyle(.borderlessButton).fixedSize()
+            } label: { Text("Review") }.menuStyle(.borderlessButton).tint(.primary).fixedSize()
             if !session.corrections.isEmpty {
                 Menu("Accept") {
                     ForEach(GrammarScope.allCases) { scope in Button("All in \(scope.rawValue.lowercased())") { session.accept(scope) }.disabled(session.selectedCorrections(scope).isEmpty) }
                     Divider(); Button("Dismiss all") { for id in session.corrections.map(\.id) { session.dismiss(id) } }
-                }.menuStyle(.borderlessButton).fixedSize()
+                }.menuStyle(.borderlessButton).tint(.primary).fixedSize()
             }
             if !compact { Toggle("Auto", isOn: $service.automatic).toggleStyle(.switch).controlSize(.mini).fixedSize().help("Check the edited paragraph after a short pause") }
         }.font(.system(size: 11)).padding(.horizontal, compact ? 8 : 20).padding(.vertical, 7)

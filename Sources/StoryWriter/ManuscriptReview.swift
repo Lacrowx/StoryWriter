@@ -149,6 +149,6 @@ struct ManuscriptReviewSheet: View {
                 Button("Accept all in manuscript") { review.accept(Set(review.reports.flatMap(\.corrections).map(\.id)), projectID: projectID, store: store) }.buttonStyle(.borderedProminent).disabled(review.checking || review.correctionCount == 0)
             }
             Text("A saved revision protects your manuscript before a group is applied.").font(.caption2).foregroundStyle(.secondary)
-        }.padding(28).frame(width: 820, height: 720).task { await service.ensureConnection() }.onDisappear { review.cancel() }
+        }.padding(28).frame(width: 820, height: 720).writerSheet().task { await service.ensureConnection() }.onDisappear { review.cancel() }
     }
 }

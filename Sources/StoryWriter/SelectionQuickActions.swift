@@ -227,7 +227,7 @@ private struct SelectionQuickActionBubble: View {
                 if !suggestions.isEmpty { Menu { ContextCommandItems(commands: suggestions) } label: { Label("Suggestions", systemImage: "checkmark.circle") } }
                 Spacer(minLength: 0)
                 Button { session.copyPassage() } label: { Image(systemName: "doc.on.doc") }.help("Copy selection").accessibilityLabel("Copy selection")
-            }.menuStyle(.borderlessButton)
+            }.menuStyle(.borderlessButton).tint(.primary)
         }.buttonStyle(.bordered).controlSize(.small).padding(12).frame(width: 370)
     }
 }

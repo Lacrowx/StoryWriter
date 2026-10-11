@@ -106,8 +106,9 @@ struct WritingTextArea: View {
                 else { FieldSuggestionBadge(session: session).frame(maxWidth: .infinity, alignment: .trailing) }
             }
             if let session = controller.objectNames { ObjectNameBar(session: session) }
-        }.background(chrome ? Color.clear : Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-            .clipShape(RoundedRectangle(cornerRadius: 7)).overlay(RoundedRectangle(cornerRadius: 7).stroke(chrome ? Color.clear : Color.primary.opacity(0.1)))
+        }.background(chrome ? Color.clear : Color(nsColor: .textBackgroundColor).opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(chrome ? Color.clear : (controller.fieldFocused ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.08)), lineWidth: controller.fieldFocused ? 2 : 1))
             .id("\(namespace)/\(label)")
     }
 }

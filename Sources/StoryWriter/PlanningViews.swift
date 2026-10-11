@@ -14,7 +14,7 @@ struct CharactersView: View {
         if let project = store.project(projectID) {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    HStack { TextField("Find a character", text: $search).textFieldStyle(.roundedBorder); Button(action: add) { Image(systemName: "plus") }.buttonStyle(.plain).help("Add character") }.padding(16)
+                    HStack { WriterSearchField(title: "Find a character", text: $search); Button(action: add) { Image(systemName: "plus") }.buttonStyle(WriterIconButtonStyle()).help("Add character").accessibilityLabel("Add character") }.padding(16)
                     List(selection: $selection) {
                         ForEach(project.characters.filter { search.isEmpty || [$0.name, $0.role, $0.notes].joined(separator: " ").localizedCaseInsensitiveContains(search) }) { character in
                             HStack(alignment: .top, spacing: 10) {
@@ -52,8 +52,8 @@ struct CharacterDetails: View {
                 VStack(spacing: 18) {
                     LabeledField("Name", text: $character.name)
                     HStack(alignment: .top, spacing: 18) { LabeledField("Role in the story", text: $character.role, placeholder: "Protagonist, rival, confidant…"); LabeledField("Pronouns", text: $character.pronouns) }
+                    LabeledField("Aliases", text: Binding(get: { (character.aliases ?? []).joined(separator: ",") }, set: { character.aliases = $0.components(separatedBy: ",") }), placeholder: "First name, nickname, alternate spelling")
                 }.cardSurface()
-                LabeledField("Aliases", text: Binding(get: { (character.aliases ?? []).joined(separator: ",") }, set: { character.aliases = $0.components(separatedBy: ",") }), placeholder: "First name, nickname, alternate spelling")
                 NoteField("Appearance & mannerisms", hint: "The details a reader will remember.", text: $character.appearance, height: 85)
                 NoteField("Personality & voice", hint: "How they think, speak, and act under pressure.", text: $character.personality, height: 100)
                 NoteField("Wants & needs", hint: "What they pursue, and what they actually need.", text: $character.motivation, height: 100)
@@ -62,7 +62,7 @@ struct CharacterDetails: View {
                 NoteField("Relationships", hint: "Connections, loyalties, tensions, and changing dynamics.", text: $character.relationships, height: 120)
                 NoteField("Other notes", hint: "Backstory, continuity details, and ideas to revisit.", text: $character.notes, height: 120)
                 if let projectID { BacklinksView(projectID: projectID, reference: ProjectTagReference(kind: .character, objectID: character.id)).cardSurface() }
-            }.padding(30).frame(maxWidth: 820)
+            }.padding(28).frame(maxWidth: 900)
         }.frame(maxWidth: .infinity)
             .onAppear { if let destination { proxy.scrollTo(destination.field, anchor: .top) } }
             .onChange(of: destination) { _, target in if let target { proxy.scrollTo(target.field, anchor: .top) } }
@@ -84,12 +84,12 @@ struct WorldView: View {
         if let project = store.project(projectID) {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    HStack { TextField("Find a world note", text: $search).textFieldStyle(.roundedBorder); Button(action: add) { Image(systemName: "plus") }.buttonStyle(.plain) }.padding(16)
+                    HStack { WriterSearchField(title: "Find a world note", text: $search); Button(action: add) { Image(systemName: "plus") }.buttonStyle(WriterIconButtonStyle()).help("Add world note").accessibilityLabel("Add world note") }.padding(16)
                     Picker("Category", selection: $category) { Text("All categories").tag(Optional<WorldCategory>.none); ForEach(WorldCategory.allCases) { Text($0.rawValue).tag(Optional($0)) } }.labelsHidden().padding(.horizontal, 16).padding(.bottom, 12)
                     List(selection: $selection) {
                         ForEach(project.worldNotes.filter { (category == nil || $0.category == category) && (search.isEmpty || [$0.title, $0.summary, $0.details].joined(separator: " ").localizedCaseInsensitiveContains(search)) }) { note in
                             HStack(alignment: .top, spacing: 11) {
-                                Image(systemName: note.category.symbol).foregroundStyle(Color.accentColor).frame(width: 20).padding(.top, 2)
+                                WriterSymbol(name: note.category.symbol)
                                 VStack(alignment: .leading, spacing: 5) { Text(note.title).font(.system(size: 13, weight: .medium)); Text(note.category.rawValue).font(.caption).foregroundStyle(.secondary) }
                             }.padding(.vertical, 9).tag(note.id).contextMenu { Button("Pin beside manuscript") { pin(.object(ProjectTagReference(kind: .world, objectID: note.id))) }; Button("Delete note…", role: .destructive) { deleteID = note.id }; Divider(); AppContextMenuItems() }
                         }
@@ -117,13 +117,16 @@ struct WorldDetails: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 SectionHeading(title: note.title, subtitle: "Build a setting that stays consistent from chapter to chapter.")
-                VStack(spacing: 18) { LabeledField("Title", text: $note.title); Picker("Category", selection: $note.category) { ForEach(WorldCategory.allCases) { Text($0.rawValue).tag($0) } } }.cardSurface()
-                LabeledField("Aliases", text: Binding(get: { (note.aliases ?? []).joined(separator: ",") }, set: { note.aliases = $0.components(separatedBy: ",") }), placeholder: "Other names used in the manuscript")
+                VStack(alignment: .leading, spacing: 18) {
+                    LabeledField("Title", text: $note.title)
+                    HStack { Picker("Category", selection: $note.category) { ForEach(WorldCategory.allCases) { Text($0.rawValue).tag($0) } }; Spacer() }
+                    LabeledField("Aliases", text: Binding(get: { (note.aliases ?? []).joined(separator: ",") }, set: { note.aliases = $0.components(separatedBy: ",") }), placeholder: "Other names used in the manuscript")
+                }.cardSurface()
                 NoteField("At a glance", hint: "A short description to find your bearings quickly.", text: $note.summary, height: 90)
                 NoteField("Details & rules", hint: "Atmosphere, geography, history, limits, and the facts your story relies on.", text: $note.details, height: 280)
                 NoteField("Connections & continuity", hint: "Related characters, chapters, places, and things to remember.", text: $note.connections, height: 160)
                 if let projectID { BacklinksView(projectID: projectID, reference: ProjectTagReference(kind: .world, objectID: note.id)).cardSurface() }
-            }.padding(30).frame(maxWidth: 820)
+            }.padding(28).frame(maxWidth: 900)
         }.frame(maxWidth: .infinity)
             .onAppear { if let destination { proxy.scrollTo(destination.field, anchor: .top) } }
             .onChange(of: destination) { _, target in if let target { proxy.scrollTo(target.field, anchor: .top) } }

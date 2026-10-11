@@ -88,7 +88,7 @@ struct SyncReviewSheet: View {
                 Button("Merge chosen versions") { apply(keepBoth: false) }
                     .buttonStyle(.borderedProminent).disabled(applying || sync.running || current.conflicts.contains { choices[$0.id] == nil })
             }
-        }.padding(24).frame(width: 1040, height: 620)
+        }.padding(24).frame(width: 1040, height: 620).writerSheet()
             .onChange(of: current.id) { _, _ in choices = [:]; selectedID = nil }
     }
     @ViewBuilder private func preview(_ conflict: MergeConflict, choice: MergeChoice, title: String, project: StoryProject) -> some View {

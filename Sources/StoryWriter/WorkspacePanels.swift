@@ -12,7 +12,7 @@ struct ProjectSearchSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Find a passage or project note").font(.title2)
-            HStack { TextField("Search this project", text: $query).textFieldStyle(.roundedBorder).focused($focused); Toggle("Manuscript only", isOn: $manuscriptOnly) }
+            HStack { WriterSearchField(title: "Search this project", text: $query).focused($focused); Toggle("Manuscript only", isOn: $manuscriptOnly) }
             let results = store.project(projectID).map { StorySearch.results(in: $0, query: query, manuscriptOnly: manuscriptOnly) } ?? []
             Text(query.isEmpty ? "Search chapters, characters, world entries, and reference notes." : "\(results.count) matches").font(.caption).foregroundStyle(.secondary)
             ScrollView {
@@ -22,9 +22,11 @@ struct ProjectSearchSheet: View {
                     }
                     if !query.isEmpty && results.isEmpty { ContentUnavailableView.search(text: query) }
                 }
+            }.overlay {
+                if query.isEmpty { ContentUnavailableView("Search your project", systemImage: "doc.text.magnifyingglass", description: Text("Find a phrase, character, place, or reference note.")) }
             }
             HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
-        }.padding(24).frame(width: 660, height: 600).onAppear { focused = true }
+        }.padding(24).frame(width: 660, height: 600).writerSheet().onAppear { focused = true }
     }
 }
 
@@ -43,8 +45,8 @@ struct WritingSidePanel: View {
     var close: () -> Void
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Text("Beside your writing").font(.headline); Spacer(); Button(action: close) { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close writing panel") }.padding(16)
-            Picker("Writing panel", selection: $tab) { ForEach(WritingPanelTab.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 12).padding(.bottom, 12)
+            HStack { Text("Beside your writing").font(.headline); Spacer(); Button(action: close) { Image(systemName: "xmark") }.buttonStyle(WriterIconButtonStyle()).help("Close writing panel").accessibilityLabel("Close writing panel") }.padding(16)
+            Picker("Writing panel", selection: $tab) { ForEach(WritingPanelTab.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().controlSize(.regular).padding(.horizontal, 16).padding(.bottom, 16)
             Divider()
             switch tab {
             case .research: ResearchPanel(projectID: projectID, pinned: $pinned)
@@ -150,9 +152,9 @@ struct ScenePanel: View {
                                         Button("Move earlier") { perform(chapter.id) { try $0.moveScene(scene.id, offset: -1) } }.disabled(index == 0)
                                         Button("Move later") { perform(chapter.id) { try $0.moveScene(scene.id, offset: 1) } }.disabled(index == chapter.orderedScenes.count - 1)
                                         Button("Merge with previous") { perform(chapter.id) { try $0.mergeScene(scene.id) } }.disabled(index == 0)
-                                    } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 20)
+                                    } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).tint(.primary).frame(width: 20)
                                 }
-                            }.padding(14).background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+                            }.cardSurface()
                         }
                         if chapter.orderedScenes.isEmpty { Text("Place the cursor where the next scene begins, then choose Split at cursor.").foregroundStyle(.secondary).padding(20) }
                     }.padding(12)
@@ -192,7 +194,7 @@ struct SceneDetailsSheet: View {
             LabeledField("Story time", text: binding(\.storyTime, fallback: ""), placeholder: "Day 2 · morning, or an exact date")
             HStack { Text("Timeline order"); TextField("Optional number", text: Binding(get: { binding(\.timelineOrder, fallback: nil).wrappedValue.map(String.init) ?? "" }, set: { binding(\.timelineOrder, fallback: nil).wrappedValue = Int($0) })).textFieldStyle(.roundedBorder).frame(width: 140) }
             HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
-        }.padding(24).frame(width: 480).environment(\.grammarNamespace, sceneID.uuidString)
+        }.padding(24).frame(width: 480).writerSheet().environment(\.grammarNamespace, sceneID.uuidString)
     }
 }
 
@@ -224,7 +226,7 @@ struct CommentQueue: View {
                                         Button("Attach to selection") { reattach(chapter, comment) }.disabled(editor.chapterID != chapter.id || editor.selectionText.isEmpty)
                                     }
                                     Toggle("Resolved", isOn: commentBinding(chapter.id, comment.id, \.resolved, fallback: comment.resolved)).font(.caption)
-                                }.padding(12).background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+                                }.cardSurface()
                             }
                         }
                         if count == 0 { Text("No \(includeResolved ? "" : "unresolved ")comments. Select manuscript text and choose Add comment.").foregroundStyle(.secondary).padding(20) }
@@ -273,13 +275,13 @@ struct TimelineSheet: View {
                                 Spacer()
                                 Button("Details") { editing = item }
                                 Button("Go to scene") { dismiss(); navigate(StoryDestination(kind: .chapter, itemID: item.chapter.id, range: item.chapter.range(of: item.scene), expectedText: item.chapter.plainText)) }
-                            }.padding(14).background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+                            }.cardSurface()
                         }
                     }
                 }
             }
             HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
-        }.padding(24).frame(width: 740, height: 600)
+        }.padding(24).frame(width: 740, height: 600).writerSheet()
             .sheet(item: $editing) { item in SceneDetailsSheet(projectID: projectID, chapterID: item.chapter.id, sceneID: item.scene.id) }
     }
 }

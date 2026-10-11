@@ -124,7 +124,7 @@ struct RevisionHistorySheet: View {
                 Button("Restore entire project…") { confirmation = .project }.disabled(saved == nil)
                 Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
-        }.padding(24).frame(width: 1040, height: 760)
+        }.padding(24).frame(width: 1040, height: 760).writerSheet()
             .onChange(of: revisionID) { _, _ in load(revisions) }
             .onChange(of: chapterID) { _, id in if let id, store.project(projectID)?.chapters.contains(where: { $0.id == id }) == true { recoverToID = id } }
             .onAppear { revisionID = revisions.first?.id }

@@ -127,10 +127,10 @@ struct ContinuityPanel: View {
                             Button("\(action.label) here…") { request = makeRequest(chapter, characterID: personID, item: row.item, action: action) }
                         }
                         if category == .knowledge { Button("Add a new detail…") { var next = makeRequest(chapter, characterID: personID); next.parentID = row.id; request = next } }
-                    } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 20).disabled(editor.chapterID != chapter.id)
+                    } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).tint(.primary).frame(width: 20).disabled(editor.chapterID != chapter.id)
                 }.padding(.vertical, 3)
             }
-        }
+        }.frame(maxWidth: .infinity, alignment: .leading).cardSurface(inset: 12)
     }
     private func makeRequest(_ chapter: Chapter, characterID: UUID, item: ContinuityItem? = nil, action: ContinuityAction? = nil) -> ContinuityRequest {
         ContinuityRequest(chapterID: chapter.id, range: editor.selectionRange, expectedText: chapter.plainText, characterID: characterID, category: item?.category ?? .knowledge, action: action ?? item?.category.actions.first ?? .learns, itemID: item?.id)
@@ -224,7 +224,7 @@ struct ContinuityRecordSheet: View {
                 if let error { Text(error).font(.callout).foregroundStyle(.red) }
                 HStack { Spacer(); Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction); Button(timing == "start" ? "Save starting state" : timing == "plan" ? "Save plan" : "Save from here", action: save).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(characterID == nil || (selectedID == nil && !creating)) }
             }
-        }.padding(24).frame(width: 570)
+        }.padding(24).frame(width: 570).writerSheet()
         .onAppear {
             let project = store.project(projectID)
             characterID = request.characterID ?? project?.characters.first?.id
@@ -271,24 +271,25 @@ struct ContinuityLibrarySheet: View {
             if let project = store.project(projectID) {
                 HSplitView {
                     VStack(alignment: .leading, spacing: 10) {
-                        TextField("Find information, items, tasks…", text: $query).textFieldStyle(.roundedBorder)
+                        WriterSearchField(title: "Find information, items, tasks…", text: $query)
                         List(selection: $selectedID) {
                             ForEach(Continuity.matches(project.trackedContinuityItems, query: query)) { item in
                                 VStack(alignment: .leading, spacing: 3) { Text(item.name); Text(item.category.noun).font(.caption).foregroundStyle(.secondary) }.tag(item.id)
                             }
-                        }
-                    }.frame(minWidth: 200, idealWidth: 240, maxWidth: 280).padding(.trailing, 12)
+                        }.listStyle(.sidebar).scrollContentBackground(.hidden)
+                    }.frame(minWidth: 200, idealWidth: 240, maxWidth: 280).padding(12).background(.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 12))
                     if let item = project.trackedContinuityItems.first(where: { $0.id == selectedID }) {
                         ContinuityItemDetails(projectID: projectID, itemID: item.id, chapterID: chapterID, editor: editor, merged: { selectedID = $0 }, go: { target in dismiss(); navigate(target) }).id(item.id).frame(minWidth: 390)
                     } else {
                         VStack(spacing: 12) {
                             Image(systemName: "list.bullet.rectangle").font(.largeTitle)
-                            Text(project.trackedContinuityItems.isEmpty ? "Track something from the Continuity sidebar or a selected manuscript passage." : "Choose an item to see who learned it, when, and from which passage.").foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            Text(project.trackedContinuityItems.isEmpty ? "No tracked items yet" : "Select a tracked item").font(.headline)
+                            Text(project.trackedContinuityItems.isEmpty ? "Select a passage and choose Track a character change, or use Track something beside your writing." : "See each character’s knowledge, possessions, and passage history.").foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }.padding(30).frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
             }
-        }.padding(24).frame(width: 800, height: 640).onAppear { selectedID = initialItemID }
+        }.padding(24).frame(width: 800, height: 640).writerSheet().onAppear { selectedID = initialItemID }
     }
 }
 
@@ -352,7 +353,7 @@ struct ContinuityItemDetails: View {
                                 Menu {
                                     if entry.chapterID != nil { Button("Attach to current selection / cursor") { attach(entry) }.disabled(editor.chapterID != chapterID) }
                                     Button("Remove this change", role: .destructive) { remove(entry) }
-                                } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 20)
+                                } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).tint(.primary).frame(width: 20)
                             }
                             if entry.event.planned { Text("Planned · not established yet").font(.caption).foregroundStyle(.secondary) }
                             if entry.event.detached { Text("Source changed · needs review").font(.caption).foregroundStyle(.orange) }

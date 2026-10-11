@@ -19,17 +19,17 @@ struct ReferencesView: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     HStack {
-                        TextField("Find a reference", text: $search).textFieldStyle(.roundedBorder)
+                        WriterSearchField(title: "Find a reference", text: $search)
                         Menu {
                             Button("Add files…") { Panels.importSources(projectID, store: store) }
                             Button("Add web link…") { showLinkSheet = true }
                             Button("Add a note") { let note = ReferenceSource(title: "New research note"); store.update(projectID) { $0.sources.append(note) }; selection = note.id }
-                        } label: { Image(systemName: "plus") }.menuStyle(.borderlessButton).frame(width: 20)
+                        } label: { Image(systemName: "plus") }.menuStyle(.borderlessButton).tint(.primary).frame(width: 20)
                     }.padding(16)
                     List(selection: $selection) {
                         ForEach(project.sources.filter { search.isEmpty || [$0.title, $0.notes, $0.tags, $0.webURL ?? ""].joined(separator: " ").localizedCaseInsensitiveContains(search) }) { source in
                             HStack(alignment: .top, spacing: 11) {
-                                Image(systemName: source.symbol).foregroundStyle(Color.accentColor).frame(width: 22).padding(.top, 3)
+                                WriterSymbol(name: source.symbol)
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(source.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
                                     Text(source.webURL != nil ? (source.snapshotPath != nil ? "Web link · saved copy" : "Web link") : (source.fileExtension.isEmpty ? "Research note" : source.fileExtension.uppercased())).font(.caption).foregroundStyle(.secondary)
@@ -76,7 +76,7 @@ struct ReferenceDetails: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Image(systemName: source.symbol).foregroundStyle(Color.accentColor)
-                WritingTextArea(text: $source.title, height: 30, label: "reference title", fontSize: 17, compact: true)
+                WritingTextArea(text: $source.title, height: 30, label: "reference title", fontSize: 17, compact: true, chrome: true)
                 Spacer()
                 if source.webURL != nil {
                     if source.snapshotPath != nil { Toggle("Saved copy", isOn: $savedCopy).toggleStyle(.switch).controlSize(.small) }
@@ -89,15 +89,15 @@ struct ReferenceDetails: View {
                         }
                     }.disabled(web.isSaving || web.isLoading || (savedCopy && source.snapshotPath != nil)).help("Saves the loaded page and its available resources")
                 }
-                Button { pin(.source(source.id)) } label: { Image(systemName: "pin") }.buttonStyle(.plain).help("Pin beside manuscript")
-                Button { showNotes.toggle() } label: { Image(systemName: "note.text") }.buttonStyle(.plain).help("Show reference notes")
+                Button { pin(.source(source.id)) } label: { Image(systemName: "pin") }.buttonStyle(WriterIconButtonStyle()).help("Pin beside manuscript").accessibilityLabel("Pin beside manuscript")
+                Button { showNotes.toggle() } label: { Image(systemName: "note.text") }.buttonStyle(WriterIconButtonStyle()).help("Show reference notes").accessibilityLabel("Show reference notes")
                 Menu {
                     if let link = source.webURL, let url = URL(string: link) { Button("Open in browser") { NSWorkspace.shared.open(url) } }
                     if let file = store.mediaURL(source, projectID: projectID) {
                         Button("Open in default app") { NSWorkspace.shared.open(file) }
                         Button("Show imported file in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
                     }
-                } label: { Image(systemName: "arrow.up.forward.app") }.menuStyle(.borderlessButton).frame(width: 24)
+                } label: { Image(systemName: "arrow.up.forward.app") }.menuStyle(.borderlessButton).tint(.primary).frame(width: 24)
             }.padding(.horizontal, 24).padding(.vertical, 18)
             if let link = source.webURL { Text(link).font(.caption).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(1).padding(.horizontal, 24).padding(.bottom, 12) }
             Divider()
@@ -113,7 +113,7 @@ struct ReferenceDetails: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack { Text("YOUR NOTES").font(.system(size: 10, weight: .semibold)).tracking(1.2).foregroundStyle(.secondary); Spacer(); TextField("Tags, separated by commas", text: $source.tags).textFieldStyle(.roundedBorder).frame(maxWidth: 280) }
                     WritingTextArea(text: $source.notes, height: source.relativePath == nil && source.webURL == nil ? 300 : 100, label: "reference note").frame(maxHeight: source.relativePath == nil && source.webURL == nil ? .infinity : 150)
-                }.padding(20).background(Color(nsColor: .controlBackgroundColor))
+                }.cardSurface().padding(16)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -180,12 +180,12 @@ struct AddLinkSheet: View {
     @State private var error: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Label("Save a web reference", systemImage: "link").font(.system(size: 23, weight: .medium, design: .serif))
+            Label("Save a web reference", systemImage: "link").font(.system(size: 23, weight: .semibold))
             Text("View the page inside StoryWriter. Use “Save page offline” after it loads to keep a local copy.").foregroundStyle(.secondary)
             LabeledField("Web address", text: $url, placeholder: "https://…")
             LabeledField("Title (optional)", text: $title)
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
             HStack { Spacer(); Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction); Button("Add link") { do { try store.addLink(url, title: title, projectID: projectID); dismiss() } catch { self.error = error.localizedDescription } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-        }.padding(30).frame(width: 470)
+        }.padding(30).frame(width: 470).writerSheet()
     }
 }
