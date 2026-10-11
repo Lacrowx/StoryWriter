@@ -39,9 +39,11 @@ final class OsaurusReviewTests: XCTestCase {
             XCTAssertTrue(system.contains(#"{"issues":[]}"#))
             XCTAssertFalse(system.contains("revisedText"))
             XCTAssertFalse(system.contains(#""explanation":""#))
-            for detail in ["Use spare prose.", "Elisa lives alone.", "sie/ihr", "At the harbour"] { XCTAssertTrue(system.contains(detail)) }
+            for detail in ["Elisa lives alone.", "sie/ihr", "At the harbour"] { XCTAssertTrue(system.contains(detail)) }
+            XCTAssertFalse(system.contains("Use spare prose."), "A style brief must not steer a grammar-only review")
             XCTAssertTrue(system.contains(language == "de" ? "keine optionalen Stiländerungen" : "no optional style changes"))
-            XCTAssertEqual(body["max_tokens"] as? Int, 1024)
+            XCTAssertEqual(body["max_tokens"] as? Int, 512)
+            XCTAssertEqual(body["temperature"] as? Int, 0)
             XCTAssertEqual(body["reasoning_effort"] as? String, "none")
             XCTAssertEqual((body["chat_template_kwargs"] as? [String: Bool])?["enable_thinking"], false)
         }
@@ -53,6 +55,55 @@ final class OsaurusReviewTests: XCTestCase {
         let request = try OsaurusClient.reviewRequest(baseURL: "http://localhost:1337/v1", text: String(repeating: "Grüße 🌊. ", count: 500), language: "de", model: LocalModel(id: "local-model"), context: empty, includeStyle: true)
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
         XCTAssertEqual(body["max_tokens"] as? Int, 4096)
+        let style = try OsaurusClient.reviewRequest(baseURL: "http://localhost:1337/v1", text: "Elisa wartet.", language: "de", model: LocalModel(id: "local-model"), context: context, includeStyle: true)
+        let styleBody = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(style.httpBody)) as? [String: Any])
+        let styleMessages = try XCTUnwrap(styleBody["messages"] as? [[String: String]])
+        XCTAssertTrue(styleMessages[0]["content"]?.contains("Use spare prose.") == true)
+    }
+
+    func testCommonWrappersAndTrailingCommasPreserveLiteralStrings() throws {
+        let passage = #"She go home. He wrote "{bracket,}". Grüße 🌊."#
+        let rows = #"[{"original":"She go home.","replacement":"She goes home.","kind":"GRAMMAR",}, {"original":"He wrote \"{bracket,}\".","replacement":"He wrote \"{brackets,}\".","explanation":null,"kind":"style",},]"#
+        for content in [rows, "Here is the review:\n```json\n{\"issues\":\(rows),}\n```", "{\"corrections\":\(rows)}"] {
+            let issues = try OsaurusClient.parseIssues(content, passage: passage)
+            XCTAssertEqual(issues.count, 2)
+            XCTAssertEqual(issues[0].replacement, "She goes home.")
+            XCTAssertEqual(issues[1].replacement, #"He wrote "{brackets,}"."#)
+        }
+        let single = #"{"original":"She go home.","replacement":"She goes home."}"#
+        XCTAssertEqual(try OsaurusClient.parseIssues(single, passage: passage).count, 1)
+        XCTAssertTrue(try OsaurusClient.parseIssues("[]", passage: passage).isEmpty)
+    }
+
+    func testReasoningAndExamplesDoNotBecomeSuggestions() throws {
+        let correction = #"{"issues":[{"original":"She go home.","replacement":"She goes home."}]}"#
+        let passage = "She go home."
+        XCTAssertEqual(try OsaurusClient.parseIssues("<think>Example {\"issues\":[]} with braces</think>\n" + correction, passage: passage).count, 1)
+        XCTAssertEqual(try OsaurusClient.parseIssues("Example: {\"issues\":[]}\nActual review: " + correction, passage: passage).count, 1)
+        XCTAssertTrue(try OsaurusClient.parseIssues(correction + "\nFinal: {\"issues\":[]}", passage: passage).isEmpty)
+        for response in ["<think>" + correction, "{\"result\":" + correction + "}", "{\"issues\":[{\"original\":\"She go home.\",\"replacement\":\"She goes home.\"}", "{\"issues\":null}", "No changes needed."] {
+            XCTAssertThrowsError(try OsaurusClient.parseIssues(response, passage: passage))
+        }
+    }
+
+    func testMalformedEntriesDoNotDiscardIndependentValidCorrections() throws {
+        let response = #"{"issues":[null, {"original":"She go home.","replacement":42}, {"original":"She go home.","replacement":"She goes home.","kind":null,"explanation":[]}, {"original":"Not in the input","replacement":"Invented text"}, {"original":"She go home.","replacement":"She goes home."}]}"#
+        let issues = try OsaurusClient.parseIssues(response, passage: "She go home.")
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues[0].category, .grammar)
+        XCTAssertThrowsError(try OsaurusClient.parseIssues(#"{"issues":[{"original":"She go home.","replacement":null}]}"#, passage: "She go home."))
+        XCTAssertThrowsError(try OsaurusClient.parseIssues(#"{"issues":[{}]}"#, passage: "She go home."))
+    }
+
+    func testGrammarOnlyFilteringAndOverlapsKeepTargetedCorrections() throws {
+        let passage = "She go home. It was very quiet."
+        let response = #"{"issues":[{"original":"She go home. It was very quiet.","replacement":"She goes home. Silence fell.","kind":"style"},{"original":"She go","replacement":"She goes","kind":"grammar"},{"original":"It was very quiet.","replacement":"It was quiet.","kind":"style"}]}"#
+        let all = try OsaurusClient.parseIssues(response, passage: passage)
+        XCTAssertEqual(all.map(\.original), ["She go", "It was very quiet."])
+        let grammar = try OsaurusClient.parseIssues(response, passage: passage, includeStyle: false)
+        XCTAssertEqual(grammar.map(\.replacement), ["She goes"])
+        XCTAssertTrue(try OsaurusClient.parseIssues(#"{"issues":[{"original":"It was very quiet.","replacement":"It was quiet.","kind":"style"}]}"#, passage: passage, includeStyle: false).isEmpty)
+        XCTAssertThrowsError(try OsaurusClient.parseIssues(#"{"issues":[{"original":"ana","replacement":"anna"}]}"#, passage: "banana"), "Even overlapping repeated quotes are ambiguous")
     }
 
     func testCachedReviewsRequireIdenticalTextSettingsAndContext() {

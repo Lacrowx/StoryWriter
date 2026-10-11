@@ -76,7 +76,7 @@ enum AppleWritingModel {
                 switch response.content.kind { case .spelling: kind = .spelling; case .grammar: kind = .grammar; case .style: kind = .style }
                 let issues = WritingReviewDiff.issues(original: text, revision: RevisedWritingResult(revisedText: response.content.revisedText, explanation: response.content.explanation, kind: kind))
                 let data = try JSONEncoder().encode(ProofreadingResult(issues: issues))
-                let validated = try OsaurusClient.parseIssues(String(decoding: data, as: UTF8.self), passage: text)
+                let validated = try OsaurusClient.parseIssues(String(decoding: data, as: UTF8.self), passage: text, includeStyle: includeStyle)
                 let safe = WritingIdentityGuard.protect(validated, names: protectedNames, language: language)
                 return SpellingReview.supplement(safe, with: spelling, passage: text)
             } catch is CancellationError { throw CancellationError() }

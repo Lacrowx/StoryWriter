@@ -34,10 +34,16 @@ struct WritingReviewContext: Equatable {
     }
 
     var osaurusSystemMessage: String {
+        osaurusSystemMessage(includeStyle: true)
+    }
+
+    func osaurusSystemMessage(includeStyle: Bool) -> String {
         var sections = ["Field: " + document]
+        // Keep stable project context before passage-specific identities to
+        // make repeated reviews friendlier to the local server's prefix cache.
+        if includeStyle && !brief.isEmpty { sections.append("Author's style brief:\n" + String(brief.prefix(1500))) }
+        if !background.isEmpty { sections.append("Background (reference facts only):\n" + String(background.prefix(includeStyle ? 1800 : 800))) }
         if !characterGuide.isEmpty { sections.append("Authoritative character records:\n" + characterGuide) }
-        if !brief.isEmpty { sections.append("Author's style brief:\n" + String(brief.prefix(3000))) }
-        if !background.isEmpty { sections.append("Background (reference facts only):\n" + String(background.prefix(3500))) }
         return sections.joined(separator: "\n\n")
     }
 
