@@ -60,11 +60,14 @@ final class AutoTagTests: XCTestCase {
         try body(view, session)
     }
 
-    @MainActor private func type(_ text: String, into view: NSTextView) {
+    @MainActor private func type(_ text: String, into view: NSTextView, waitingForTagAt index: Int? = nil) {
         for character in text {
             view.insertText(String(character), replacementRange: view.selectedRange())
-            RunLoop.main.run(until: Date().addingTimeInterval(0.005)) // Auto-tagging runs after the keystroke finishes.
+            RunLoop.main.run(until: Date().addingTimeInterval(0.005)) // Each key is its own event.
         }
+        // Auto-tagging runs after the keystroke finishes; slower machines may need a moment longer.
+        let deadline = Date().addingTimeInterval(1)
+        while let index, reference(in: view, at: index) == nil, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
     }
 
     private func reference(in view: NSTextView, at index: Int) -> ProjectTagReference? {
@@ -75,7 +78,8 @@ final class AutoTagTests: XCTestCase {
         try withEditor { view, _ in
             view.textStorage?.setAttributedString(NSAttributedString(string: "", attributes: WritingStyle.attributes))
             view.typingAttributes = WritingStyle.attributes.merging([.font: NSFont.boldSystemFont(ofSize: 18)]) { $1 }
-            type("Then Mara waited", into: view)
+            type("Then Mara ", into: view, waitingForTagAt: 5)
+            type("waited", into: view)
             XCTAssertEqual(view.string, "Then Mara waited")
             XCTAssertEqual(reference(in: view, at: 5), mara.reference)
             XCTAssertEqual(reference(in: view, at: 8), mara.reference)

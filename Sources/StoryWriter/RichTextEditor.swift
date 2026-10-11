@@ -271,15 +271,20 @@ final class ManuscriptTextView: NSTextView {
     }
 
     private var tagBoundaryEdit: (range: NSRange, reference: ProjectTagReference)?
-    private var typedNameBoundary: Int?
-    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
-        tagBoundaryEdit = nil; typedNameBoundary = nil
-        let allowed = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        // Typing arrives here on every macOS version; pasting, undo, and programmatic edits do not.
+        let typed = (string as? String) ?? (string as? NSAttributedString)?.string ?? ""
+        let target = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+        super.insertText(string, replacementRange: replacementRange)
         // A single space or punctuation mark typed at the caret may complete a known name.
-        if allowed, affectedCharRange.length == 0, let replacementString, ObjectTags.isNameBoundary(replacementString),
-           undoManager?.isUndoing != true, undoManager?.isRedoing != true, !hasMarkedText() {
-            typedNameBoundary = affectedCharRange.location
+        if target.length == 0, ObjectTags.isNameBoundary(typed), !hasMarkedText(),
+           selectedRange() == NSRange(location: target.location + typed.utf16.count, length: 0) {
+            tagSession?.autoTagName(endingAt: target.location)
         }
+    }
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        tagBoundaryEdit = nil
+        let allowed = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
         if allowed, tagSession?.inserting != true, affectedCharRange.length == 0, affectedCharRange.location > 0,
            let replacementString, !replacementString.isEmpty, let storage = textStorage,
            affectedCharRange.location <= storage.length,
@@ -301,9 +306,7 @@ final class ManuscriptTextView: NSTextView {
         }
         tagBoundaryEdit = nil
         pencilComments?.invalidate()
-        let boundary = typedNameBoundary; typedNameBoundary = nil
         super.didChangeText()
-        if let boundary { tagSession?.autoTagName(endingAt: boundary) }
     }
     override func mouseDown(with event: NSEvent) {
         selectionActions?.close()
