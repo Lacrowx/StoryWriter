@@ -155,8 +155,10 @@ Planning notes and sources are excluded from manuscript exports. **Chapter → C
 
 Mac spelling marks work without a model. Set the writing language under **StoryWriter → Settings**: Automatic, English, or Deutsch. Local AI review covers chapter text and titles, story planning, character profiles, worldbuilding, and reference notes.
 
-Choose **Osaurus · local server** or **Apple · on-device** in Settings or the chapter's writing-review panel. **Suggest style improvements** is enabled by default; switch it off to request spelling and grammar corrections alone.
+Choose **MLX · built in**, **Osaurus · local server**, or **Apple · on-device** in Settings or the chapter's writing-review panel. **Suggest style improvements** is enabled by default; switch it off to request spelling and grammar corrections alone.
 
+- **MLX:** runs a model directly inside StoryWriter on Apple Silicon, without Osaurus or an API server. In **Settings → Writing Review**, enter a public Hugging Face MLX text model ID (the default is `mlx-community/Qwen3-4B-4bit`), choose **Check download**, inspect the size/model card/license, then **Download**. The model needs enough RAM for its weights plus working memory. Gated models can be downloaded separately and added with **Import model folder…**; imports copy flat safetensors/config/tokenizer assets into StoryWriter's model library. GGUF models are unsupported. Models live under `~/Library/Application Support/StoryWriter/Models`, outside projects and app updates. Downloading contacts Hugging Face; inference uses the installed files and works offline. Older saved backend choices remain intact; new Apple Silicon installations default to MLX.
+- **MLX settings:** temperature (0–1.5), top-p (0.05–1), maximum output (256–8,192 tokens), repetition penalty (1–1.3), and memory release after each review or 5/15/30 idle minutes. Defaults favor proofreading: temperature 0, top-p 1, 2,048 output tokens, no repetition penalty, 5 minutes idle. Top-p applies only above temperature 0. The runtime serializes reviews, disables thinking through compatible chat templates, uses fresh passage contexts, and rejects input over 8,192 tokens or cut-off replies. Invalid JSON gets one stricter attempt within the same output cap. Settings/model changes invalidate matching cached results. **Load / verify model**, **Release memory**, and **Remove model…** manage StoryWriter's copy without affecting writing or the original imported folder. Unsupported architectures/configurations produce a loading error; proofreading quality depends on the chosen model.
 - **Osaurus:** start its local API server, then refresh and select an installed local model. The default address is `http://127.0.0.1:1337/v1`. StoryWriter connects only to loopback addresses, refuses redirects, and lists locally owned models. It does not download models or run agent tools.
 - **Apple:** uses Apple's Foundation Models framework directly on this Mac, without an Osaurus server. Requires macOS 26 or later, a compatible Mac, enabled Apple Intelligence, and a ready on-device model. The app displays availability or language-support problems. Apple's model may decline some passages; the app reports that rather than changing your writing.
 
@@ -186,14 +188,14 @@ References: [Osaurus API guide](https://github.com/osaurus-ai/osaurus/blob/main/
 
 ## Build and verification
 
-Xcode or its command-line tools are required to rebuild. Swift Package Manager downloads the pinned Sparkle dependency; `Package.resolved` is committed.
+Xcode or its command-line tools are required to rebuild. Swift Package Manager downloads pinned Sparkle and MLX dependencies; `Package.resolved` is committed.
 
 ```sh
 zsh scripts/build-app.sh
 zsh scripts/test.sh
 ```
 
-The build script creates a release app in `dist`, embeds Sparkle and its license, generates its icon, and signs all nested helpers and the app locally. It uses a temporary build directory to work within restricted workspace environments. Set `STORYWRITER_UNIVERSAL=1` to build both architectures. `STORYWRITER_VERSION` and `STORYWRITER_BUILD_NUMBER` override the bundle version for release builds.
+Xcode 26 or later with Swift 6.2+ and the Metal compiler component is needed for the MLX build. If `xcrun metal --version` reports a missing component, run `xcodebuild -downloadComponent MetalToolchain`. The build adapter updates the pinned tokenizer checkout to find its fallback resources inside a signed macOS app; CLI and test resource lookup stays supported. The build script creates a release app in `dist`, embeds Sparkle, MLX Metal shaders, tokenizer resource bundles and dependency licenses, generates its icon, and signs all nested helpers and the app locally. It uses a temporary build directory to work within restricted workspace environments. Set `STORYWRITER_UNIVERSAL=1` to build both architectures. `STORYWRITER_VERSION` and `STORYWRITER_BUILD_NUMBER` override the bundle version for release builds.
 
 ### GitHub pipeline
 
@@ -204,6 +206,8 @@ The repository secret **SPARKLE_PRIVATE_KEY** holds the base64 Ed25519 signing s
 Native German name-recognition checks run only when macOS reports German name-tagging support. GitHub runner images may omit those assets; the deterministic discovery, tagging, continuity, saving, and export tests still run. Live Osaurus and Apple model checks require their separately documented opt-in settings.
 
 The tests cover rich text and imported references surviving save/reopen and portable import, revision restoration, source-only collections and debounced autosave, corrupt-file preservation, all publication exports, formatting/correction undo, safe media paths, local endpoint validation, model filtering, exact correction matching, saved project briefs and bounded story context, revision-to-suggestion conversion, repeated-letter spelling checks, Unicode-safe long-document review, inline annotation rebasing, grouped acceptance and undo, preservation of formatting, and whole-manuscript acceptance with stale-text protection.
+
+For an optional real MLX inference check, run `STORYWRITER_TEST_MLX_MODEL=/absolute/path/to/model zsh scripts/test.sh --filter testLiveMLXReview`. It checks English/German corrections with installed weights and is skipped in normal CI. `STORYWRITER_MODEL_DIR` overrides the separate model library for isolated testing.
 
 Set `STORYWRITER_DATA_DIR` when launching the executable to use a separate library for development or testing.
 

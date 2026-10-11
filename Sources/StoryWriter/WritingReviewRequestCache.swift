@@ -11,6 +11,7 @@ struct WritingReviewRequestCache {
         var baseURL: String
         var includeStyle: Bool
         var context: WritingReviewContext
+        var mlxSettings: MLXModelSettings? = nil
     }
     private var entries: [(Key, [GrammarIssue])] = []
     private let capacity: Int

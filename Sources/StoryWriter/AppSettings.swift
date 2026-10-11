@@ -193,6 +193,7 @@ private struct WritingReviewSettings: View {
             Toggle("Suggest new characters and places while typing", isOn: $names)
             Text("Local name recognition adds purple marks and a new-names button.").settingsHint()
         }
+        if service.backend == .mlx { MLXModelControls() }
         if service.backend == .osaurus {
             Section("Osaurus connection") {
                 TextField("Server address", text: $baseURL)

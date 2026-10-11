@@ -8,9 +8,9 @@ enum GrammarScope: String, CaseIterable, Identifiable {
 }
 
 enum WritingBackend: String, CaseIterable, Identifiable {
-    case osaurus, apple
+    case mlx, osaurus, apple
     var id: String { rawValue }
-    var label: String { self == .apple ? "Apple · on device" : "Osaurus · local server" }
+    var label: String { switch self { case .mlx: return "MLX · built in"; case .apple: return "Apple · on device"; case .osaurus: return "Osaurus · local server" } }
 }
 
 struct LocatedCorrection: Identifiable, Equatable {
@@ -192,7 +192,7 @@ final class LocalGrammarService: ObservableObject {
     @Published var models: [LocalModel] = []
     @Published var connecting = false
     @Published var backend: WritingBackend {
-        didSet { UserDefaults.standard.set(backend.rawValue, forKey: "writingReviewBackend"); message = nil; cachedResults.removeAll() }
+        didSet { UserDefaults.standard.set(backend.rawValue, forKey: "writingReviewBackend"); message = nil; cachedResults.removeAll(); if backend != .mlx { Task { await MLXWritingModel.shared.unload() } } }
     }
     @Published var message: String?
     @Published var modelID: String {
@@ -213,10 +213,11 @@ final class LocalGrammarService: ObservableObject {
     var cachedResults: [String: CachedGrammarResult] = [:]
 
     init() {
-        backend = WritingBackend(rawValue: UserDefaults.standard.string(forKey: "writingReviewBackend") ?? "") ?? .osaurus
+        backend = WritingBackend(rawValue: UserDefaults.standard.string(forKey: "writingReviewBackend") ?? "") ?? (MLXWritingModel.available ? .mlx : .osaurus)
         modelID = UserDefaults.standard.string(forKey: "osaurusModel") ?? ""
         automatic = UserDefaults.standard.object(forKey: "automaticGrammar") as? Bool ?? true
         includeStyle = UserDefaults.standard.object(forKey: "reviewWritingStyle") as? Bool ?? true
+        MLXModelLibrary.shared.settingsChanged = { [weak self] in self?.cachedResults.removeAll() }
     }
     func connect() async {
         guard !connecting else { return }
@@ -241,6 +242,21 @@ final class LocalGrammarService: ObservableObject {
             actualLanguage = recognizer.dominantLanguage == .german ? "de" : "en"
         } else { actualLanguage = language }
         if selectedBackend == .apple { return try await AppleWritingModel.review(text, language: actualLanguage, context: context, includeStyle: style) }
+        if selectedBackend == .mlx {
+            let library = MLXModelLibrary.shared
+            guard let model = library.selectedModel else { throw ProjectError.invalid("Download or import an MLX model in Settings → Writing Review.") }
+            let settings = library.settings.validated
+            let key = WritingReviewRequestCache.Key(text: text, language: actualLanguage,
+                model: LocalModel(id: model.id.uuidString, owned_by: "mlx"), baseURL: "builtin:mlx",
+                includeStyle: style, context: context, mlxSettings: settings)
+            if let cached = requestCache.result(for: key) { return cached }
+            let issues = try await MLXWritingModel.shared.review(text: text, language: actualLanguage, model: model,
+                directory: library.store.directory(for: model), settings: settings, context: context, includeStyle: style)
+            try Task.checkCancellation()
+            guard backend == selectedBackend, library.selectedModel?.id == model.id, library.settings.validated == settings else { throw CancellationError() }
+            requestCache.store(issues, for: key)
+            return issues
+        }
         await ensureConnection()
         guard let model = selectedModel else { throw ProjectError.invalid(message ?? "Choose a local model in the proofreading panel.") }
         try Task.checkCancellation()

@@ -11,17 +11,57 @@ mkdir -p "$task_app_dir/Contents/MacOS" "$task_app_dir/Contents/Resources" "$tas
 
 if [[ "${STORYWRITER_UNIVERSAL:-0}" == 1 ]]; then
     for task_arch in arm64 x86_64; do
-        swift build -c release "${task_swift_options[@]}" --scratch-path "$task_build_dir/$task_arch" --triple "$task_arch-apple-macosx14.0"
-        task_binary_dir=$(swift build -c release "${task_swift_options[@]}" --scratch-path "$task_build_dir/$task_arch" --triple "$task_arch-apple-macosx14.0" --show-bin-path)
+        task_disable_mlx=0
+        if [[ "$task_arch" == x86_64 ]]; then task_disable_mlx=1; fi
+        if [[ "$task_arch" == arm64 ]]; then
+            STORYWRITER_DISABLE_MLX=0 swift package --cache-path "$task_build_dir/cache" --config-path "$task_build_dir/config" --security-path "$task_build_dir/security" --disable-sandbox --scratch-path "$task_build_dir/$task_arch" resolve
+            python3 scripts/prepare-mlx-resources.py "$task_build_dir/$task_arch"
+        fi
+        STORYWRITER_DISABLE_MLX="$task_disable_mlx" swift build -c release "${task_swift_options[@]}" --scratch-path "$task_build_dir/$task_arch" --triple "$task_arch-apple-macosx14.0"
+        task_binary_dir=$(STORYWRITER_DISABLE_MLX="$task_disable_mlx" swift build -c release "${task_swift_options[@]}" --scratch-path "$task_build_dir/$task_arch" --triple "$task_arch-apple-macosx14.0" --show-bin-path)
         cp "$task_binary_dir/StoryWriter" "$task_build_dir/StoryWriter-$task_arch"
     done
     lipo -create "$task_build_dir/StoryWriter-arm64" "$task_build_dir/StoryWriter-x86_64" -output "$task_app_dir/Contents/MacOS/StoryWriter"
     task_artifact_dir="$task_build_dir/arm64/artifacts/sparkle/Sparkle"
+    task_mlx_build_dir="$task_build_dir/arm64"
+    task_resource_dir="$task_build_dir/arm64/arm64-apple-macosx/release"
 else
+    if [[ "$(uname -m)" == arm64 && "${STORYWRITER_DISABLE_MLX:-0}" != 1 ]]; then
+        swift package --cache-path "$task_build_dir/cache" --config-path "$task_build_dir/config" --security-path "$task_build_dir/security" --disable-sandbox --scratch-path "$task_build_dir" resolve
+        python3 scripts/prepare-mlx-resources.py "$task_build_dir"
+    fi
     swift build -c release "${task_swift_options[@]}" --scratch-path "$task_build_dir"
     task_binary_dir=$(swift build -c release "${task_swift_options[@]}" --scratch-path "$task_build_dir" --show-bin-path)
     cp "$task_binary_dir/StoryWriter" "$task_app_dir/Contents/MacOS/StoryWriter"
     task_artifact_dir="$task_build_dir/artifacts/sparkle/Sparkle"
+    task_mlx_build_dir="$task_build_dir"
+    task_resource_dir="$task_binary_dir"
+fi
+
+if [[ "${STORYWRITER_DISABLE_MLX:-0}" != 1 && ( "$(uname -m)" == arm64 || "${STORYWRITER_UNIVERSAL:-0}" == 1 ) ]]; then
+    rm -rf "$task_app_dir/Contents/MacOS/mlx-metal-air"
+    rm -f "$task_app_dir/Contents/MacOS/mlx.metallib"
+    task_metal_bundle="$task_app_dir/Contents/Resources/mlx-swift_Cmlx.bundle"
+    mkdir -p "$task_metal_bundle/Contents/Resources"
+    zsh scripts/build-mlx-metal.sh "$task_mlx_build_dir/checkouts/mlx-swift" "$task_metal_bundle/Contents/Resources/default.metallib"
+    cat > "$task_metal_bundle/Contents/Info.plist" <<'METAL_PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.storywriter.mlx-resources</string><key>CFBundleName</key><string>Cmlx</string><key>CFBundlePackageType</key><string>BNDL</string><key>CFBundleVersion</key><string>1</string></dict></plist>
+METAL_PLIST
+    # Keep resources inside the signed app; the build adapter teaches the
+    # pinned tokenizer to resolve this layout instead of the unsigned root.
+    rm -rf "$task_app_dir/swift-crypto_Crypto.bundle" "$task_app_dir/swift-transformers_Hub.bundle"
+    for task_resource in "$task_resource_dir"/*.bundle(N); do
+        ditto "$task_resource" "$task_app_dir/Contents/Resources/${task_resource:t}"
+    done
+    mkdir -p "$task_app_dir/Contents/Resources/ThirdPartyLicenses"
+    for task_dependency in mlx-swift mlx-swift-lm swift-transformers swift-jinja swift-huggingface swift-collections swift-crypto swift-asn1 swift-numerics yyjson EventSource; do
+        for task_license in "$task_mlx_build_dir/checkouts/$task_dependency"/LICENSE*(N); do
+            cp -f "$task_license" "$task_app_dir/Contents/Resources/ThirdPartyLicenses/$task_dependency-${task_license:t}"
+        done
+    done
+    cp -f "$task_mlx_build_dir/checkouts/mlx-swift/Source/Cmlx/metal-cpp/LICENSE.txt" "$task_app_dir/Contents/Resources/ThirdPartyLicenses/metal-cpp-LICENSE.txt"
 fi
 
 ditto "$task_artifact_dir/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework" "$task_app_dir/Contents/Frameworks/Sparkle.framework"

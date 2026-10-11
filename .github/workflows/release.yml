@@ -24,6 +24,8 @@ jobs:
         run: |
           echo "version=0.2.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "build=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_OUTPUT"
+      - name: Prepare Metal compiler for embedded MLX
+        run: xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - name: Test the app and release feed
         run: |
           zsh scripts/test.sh
