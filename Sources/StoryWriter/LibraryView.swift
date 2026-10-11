@@ -58,6 +58,7 @@ struct LibraryView: View {
                     Button { store.toggleArchivedProjects() } label: { Label(store.showArchived ? "Back to library" : "Archived projects", systemImage: "archivebox") }.buttonStyle(.plain).font(.caption)
                     Spacer()
                 }.foregroundStyle(.secondary).padding(18)
+                SyncLibraryStatus(sync: store.sync).padding(.horizontal, 18).padding(.bottom, 14)
             }.background(DesktopMaterial()).appContextMenu().navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 320)
         } detail: {
             if let project = store.selectedProject {
@@ -76,6 +77,9 @@ struct LibraryView: View {
         .environment(\.appContextCommands, libraryCommands)
         .frame(minWidth: 980, minHeight: 660)
         .sheet(item: $newKind) { NewProjectSheet(kind: $0) }
+        .sheet(item: Binding(get: { store.sync.reviewProjectID.flatMap { store.sync.reviews[$0] } }, set: { if $0 == nil { store.sync.reviewProjectID = nil } })) { review in
+            SyncReviewSheet(sync: store.sync, review: review)
+        }
         .alert("StoryWriter", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) { Button("OK") { store.errorMessage = nil } } message: { Text(store.errorMessage ?? "") }
         .onReceive(NotificationCenter.default.publisher(for: .newProject)) { notification in newKind = notification.object as? ProjectKind ?? .story }
         .onChange(of: focusMode) { _, focused in visibility = focused ? .detailOnly : .all }

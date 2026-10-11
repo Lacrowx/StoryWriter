@@ -35,7 +35,8 @@ struct StoryWriterApp: App {
     var body: some Scene {
         Window("StoryWriter", id: "main") {
             LibraryView().environmentObject(store).tint(AppTheme.accent).accentColor(AppTheme.accent)
-                .onAppear { delegate.store = store; updates.start() }
+                .onAppear { delegate.store = store; updates.start(); store.sync.start() }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await store.sync.checkNow() } }
         }
         .defaultSize(width: 1320, height: 860)
         .commands {
@@ -63,7 +64,7 @@ struct StoryWriterApp: App {
                 Button("Underline") { NSApp.sendAction(#selector(NSTextView.underline(_:)), to: nil, from: nil) }.keyboardShortcut("u")
             }
         }
-        Settings { AppSettings() }
+        Settings { AppSettings().environmentObject(store) }
     }
 }
 

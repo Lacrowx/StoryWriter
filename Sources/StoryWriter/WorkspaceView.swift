@@ -104,6 +104,7 @@ struct ProjectWorkspace: View {
                 HStack(spacing: 7) {
                     Image(systemName: store.saveStatus.hasPrefix("Saved") ? "checkmark.circle" : "arrow.triangle.2.circlepath").foregroundStyle(store.saveStatus.hasPrefix("Save failed") ? .red : .secondary)
                     Text(store.saveStatus)
+                    SyncWorkspaceStatus(sync: store.sync, projectID: projectID)
                     if let backup = store.backupConfigurations[projectID] { Text("·"); Image(systemName: backup.error == nil ? "externaldrive.badge.checkmark" : "exclamationmark.triangle").foregroundStyle(backup.error == nil ? Color.secondary : .orange).help(store.backupStatus(projectID)); Text(backup.error == nil ? (backup.lastSuccess.map { "Backed up " + $0.formatted(date: .omitted, time: .shortened) } ?? "First backup pending") : "Backup needs attention").help(store.backupStatus(projectID)) }
                     Spacer()
                     if project.kind == .story { WritingProgressButton(project: project) }
@@ -260,6 +261,11 @@ struct ProjectWorkspace: View {
                         .button("Turn off automatic backups") { store.disableBackup(projectID) }]
         }
         projectCommands += [.submenu("Automatic backups", backups, symbol: "externaldrive.badge.checkmark"),
+                            .submenu("Sync across Macs", [
+                                .button("Choose sync folder…") { store.sync.chooseFolder() },
+                                .button("Sync now", enabled: store.sync.folder != nil) { Task { await store.sync.checkNow() } },
+                                .button("Review conflicting changes…", enabled: store.sync.reviews[projectID] != nil) { store.sync.reviewProjectID = projectID }
+                            ], symbol: "icloud"),
                             .button("Show project in Finder", symbol: "folder") { NSWorkspace.shared.activateFileViewerSelecting([store.packageURL(projectID)]) }, .separator,
                             .button(project.archived ? "Restore to library" : "Archive project", symbol: "archivebox") {
                                 store.update(projectID) { $0.archived.toggle() }; store.selectedProjectID = store.visibleProjects.first?.id

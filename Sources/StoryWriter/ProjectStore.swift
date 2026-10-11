@@ -34,6 +34,13 @@ final class ProjectStore: ObservableObject {
     private var saveTask: Task<Void, Never>?
     private var dirty = Set<UUID>()
     private var lastRevision: [UUID: Date] = [:]
+    private var syncObservation: AnyCancellable?
+    lazy var sync: DriveSync = {
+        let service = DriveSync(store: self)
+        // Menus and the library's sheet binding also read child sync state.
+        syncObservation = service.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        return service
+    }()
 
     init(root: URL? = nil, createExample: Bool = true, workspaceDefaults: UserDefaults = .standard) {
         let override = ProcessInfo.processInfo.environment["STORYWRITER_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -41,7 +48,7 @@ final class ProjectStore: ObservableObject {
         self.workspaceDefaults = workspaceDefaults
         do {
             try FileManager.default.createDirectory(at: self.root, withIntermediateDirectories: true)
-            let directories = try FileManager.default.contentsOfDirectory(at: self.root, includingPropertiesForKeys: nil).filter { $0.pathExtension == "storywriter" }
+            let directories = try FileManager.default.contentsOfDirectory(at: self.root, includingPropertiesForKeys: nil).filter { $0.pathExtension == "storywriter" && !$0.lastPathComponent.hasPrefix(".") }
             for directory in directories {
                 do {
                     let project = try Self.readPackage(directory)
@@ -97,6 +104,7 @@ final class ProjectStore: ObservableObject {
 
     @discardableResult func saveNow() -> Bool {
         saveTask?.cancel()
+        let hadChanges = !dirty.isEmpty
         var failed = false
         for id in Array(dirty) {
             guard let project = project(id) else { continue }
@@ -114,6 +122,7 @@ final class ProjectStore: ObservableObject {
             } catch { failed = true; errorMessage = "Your latest changes could not be saved: \(error.localizedDescription)" }
         }
         saveStatus = failed ? "Save failed — retry with ⌘S" : "Saved on this Mac"
+        if !failed && hadChanges { sync.saved() }
         return !failed
     }
 

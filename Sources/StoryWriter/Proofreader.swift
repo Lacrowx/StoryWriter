@@ -238,12 +238,14 @@ struct WritingBackendControls: View {
 }
 
 struct AppSettings: View {
+    @EnvironmentObject private var store: ProjectStore
     @AppStorage("osaurusURL") private var baseURL = "http://127.0.0.1:1337/v1"
     @AppStorage("writingLanguage") private var language = "auto"
     @ObservedObject private var service = LocalGrammarService.shared
     var body: some View {
         Form {
             UpdateSettings()
+            SyncSettings(sync: store.sync)
             Section("Writing") {
                 Picker("Spelling language", selection: $language) { Text("Detect English / German").tag("auto"); Text("English").tag("en"); Text("Deutsch").tag("de") }
                 Text("Mac spellchecking works even when Osaurus is closed.").font(.caption).foregroundStyle(.secondary)

@@ -100,6 +100,20 @@ Each `.storywriter` project is a package containing a readable `project.json` ma
 
 Autosave and local revisions are convenient recovery tools, not a substitute for a backup on another drive.
 
+## Write across Macs with iCloud Drive
+
+In **Settings → Sync across Macs → Choose sync folder…**, select a dedicated folder such as **iCloud Drive/StoryWriter**. Install StoryWriter on your other Macs and select the same folder there. This uses ordinary user-selected files; it does not require an app-specific iCloud container or a paid Apple developer account. All stories and reference collections in each connected library are shared, including archived projects. Existing portable imports remain separate stories: syncing does not identify or combine projects by their names.
+
+Writing keeps autosaving in the local library, including while offline or when the sync folder is unavailable. Saved changes are queued for syncing after a short pause. StoryWriter checks for incoming versions about every five seconds while open and when the app becomes active. **Project → Sync across Macs → Sync now** checks immediately. Finder's **Keep Downloaded**, where available, can keep the shared folder available offline.
+
+Compatible edits merge automatically against their shared starting version: separate chapters, separate passages within a chapter, independent character/world fields, new records, and compatible chapter reordering. Rich text, project tags, and embedded attachments are preserved. Comments, scenes, and continuity passages are rebased through each text edit; changed source passages require review. Large or complex text differences may require choosing a complete writing version rather than automatic passage merging.
+
+Overlapping passage edits, conflicting formatting, deletion versus editing, incompatible ordering, and dependent continuity changes remain available for review. Click **Changes need review** in the workspace or the library. Choose a version for each overlap; compatible passage and field edits are still combined. **Keep both stories** combines compatible edits using this Mac for conflicts and saves the incoming Mac's complete version as another story. If you continue editing while a review is open, it refreshes before accepting any choice. Local revisions checkpoint the working story before incoming changes are installed.
+
+The status **Available in sync folder** means StoryWriter has written its versions to the selected folder; it does not confirm that iCloud has uploaded them or another Mac has downloaded them. Incomplete incoming versions wait for their parents and reference files instead of replacing local writing. iCloud can delay transfers. Navigation preferences, AI connection settings, backup settings, and the chosen sync folder remain local to each Mac.
+
+The shared folder retains immutable versions in **Versions** and deduplicated reference files in **Assets**. Do not edit or remove these while using sync; the history is needed to compare offline branches. Shared versions are retained without automatic pruning. **Disconnect** stops syncing and keeps both the local library and shared files. Portable copies continue to work independently of sync.
+
 ## Publishing
 
 **Export** (⇧⌘E) exports the whole story or current chapter as:
