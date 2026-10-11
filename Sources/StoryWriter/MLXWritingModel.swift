@@ -17,8 +17,7 @@ actor MLXWritingModel {
     }
     // An actor can reenter at awaits. Serialize the whole load/generate/unload
     // operation as well so simultaneous field reviews cannot double-load weights.
-    private var occupied = false
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private let gate = MLXOperationGate()
     private var idleTask: Task<Void, Never>?
     private var loadedID: UUID?
     private var contextLimit = 8192
@@ -26,17 +25,15 @@ actor MLXWritingModel {
     private var container: ModelContainer?
     #endif
 
-    private func acquire() async {
-        if occupied { await withCheckedContinuation { waiting.append($0) } }
-        else { occupied = true }
+    private func cancelIdleUnload() {
         idleTask?.cancel(); idleTask = nil
     }
-    private func release() {
-        if waiting.isEmpty { occupied = false }
-        else { waiting.removeFirst().resume() }
-    }
     func unload() async {
-        await acquire(); defer { release() }
+        try? await gate.withAccess { await self.unloadLocked() }
+    }
+    private func unloadLocked() {
+        guard !Task.isCancelled else { return }
+        cancelIdleUnload()
         clearModel()
     }
     private func clearModel() {
@@ -48,12 +45,13 @@ actor MLXWritingModel {
         loadedID = nil
     }
     func setRetention(minutes: Int) async {
-        await acquire(); defer { release() }
-        scheduleUnload(minutes: minutes)
+        try? await gate.withAccess { await self.scheduleUnload(minutes: minutes) }
     }
     private func scheduleUnload(minutes: Int) {
-        idleTask?.cancel()
+        cancelIdleUnload()
+        let minutes = MLXModelSettings(keepLoadedMinutes: minutes).validated.keepLoadedMinutes
         if minutes == 0 { clearModel(); return }
+        guard loadedID != nil else { return }
         idleTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: UInt64(minutes) * 60 * 1_000_000_000) }
             catch { return }
@@ -62,7 +60,13 @@ actor MLXWritingModel {
         }
     }
     func load(model: InstalledMLXModel, directory: URL, keepLoadedMinutes: Int) async throws {
-        await acquire(); defer { release(); scheduleUnload(minutes: keepLoadedMinutes) }
+        try await gate.withAccess {
+            try await self.loadLocked(model: model, directory: directory, keepLoadedMinutes: keepLoadedMinutes)
+        }
+    }
+    private func loadLocked(model: InstalledMLXModel, directory: URL, keepLoadedMinutes: Int) async throws {
+        cancelIdleUnload()
+        defer { scheduleUnload(minutes: keepLoadedMinutes) }
         try Task.checkCancellation()
         try await loadIfNeeded(model: model, directory: directory)
     }
@@ -78,24 +82,40 @@ actor MLXWritingModel {
         // separate. This is not a promise that arbitrary models fit in RAM.
         Memory.cacheLimit = 256 * 1024 * 1024
         let config = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("config.json"))) as? [String: Any]
-        contextLimit = max(1, (config?["max_position_embeddings"] as? Int) ?? 8192)
-        container = try await LLMModelFactory.shared.loadContainer(configuration: .init(directory: directory))
-        loadedID = model.id
-        try Task.checkCancellation()
+        contextLimit = MLXContextBudget.contextLimit(config: config ?? [:])
+        do {
+            container = try await LLMModelFactory.shared.loadContainer(configuration: .init(directory: directory))
+            loadedID = model.id
+            try Task.checkCancellation()
+        } catch {
+            // A cancelled load must not leave gigabytes resident for the idle timeout.
+            container = nil; loadedID = nil
+            Memory.clearCache()
+            throw error
+        }
         #else
         throw ProjectError.invalid("Built-in MLX models require an Apple Silicon Mac. Choose another review backend on this Mac.")
         #endif
     }
     func review(text: String, language: String, model: InstalledMLXModel, directory: URL,
                 settings: MLXModelSettings, context: WritingReviewContext, includeStyle: Bool) async throws -> [GrammarIssue] {
+        try Task.checkCancellation()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         guard text.count <= 6000 else { throw ProjectError.invalid("Review a passage of up to 6,000 characters at a time.") }
         let context = context.forPassage(text)
         let names = context.protectedTerms + WritingIdentityGuard.detectedNames(in: text, language: language)
         let spelling = await SpellingReview.candidates(text, language: language, protectedTerms: names)
-        await acquire()
+        return try await gate.withAccess {
+            try await self.reviewLocked(text: text, language: language, model: model, directory: directory,
+                settings: settings, context: context, includeStyle: includeStyle, names: names, spelling: spelling)
+        }
+    }
+    private func reviewLocked(text: String, language: String, model: InstalledMLXModel, directory: URL,
+                              settings: MLXModelSettings, context: WritingReviewContext, includeStyle: Bool,
+                              names: [String], spelling: [GrammarIssue]) async throws -> [GrammarIssue] {
+        cancelIdleUnload()
         let settings = settings.validated
-        defer { release(); scheduleUnload(minutes: settings.keepLoadedMinutes) }
+        defer { scheduleUnload(minutes: settings.keepLoadedMinutes) }
         try Task.checkCancellation()
         try await loadIfNeeded(model: model, directory: directory)
         #if canImport(MLXLLM) && arch(arm64)
@@ -103,11 +123,12 @@ actor MLXWritingModel {
         for attempt in 0...1 {
             try Task.checkCancellation()
             let system = WritingReviewPrompt.system(language: language, context: context, includeStyle: includeStyle, spelling: spelling, retry: attempt == 1)
-            let inputBudget = min(8192, contextLimit - settings.maxTokens)
+            let inputBudget = try MLXContextBudget.inputLimit(contextLimit: contextLimit, maxTokens: settings.maxTokens)
             do {
                 let result = try await container.perform { modelContext in
                     let input = try await modelContext.processor.prepare(input: UserInput(
                         chat: [.system(system), .user(text)], additionalContext: ["enable_thinking": false]))
+                    try Task.checkCancellation()
                     // A fixed budget prevents long passages from exhausting memory.
                     // Reject instead of silently truncating the input or losing names.
                     guard input.text.tokens.size <= inputBudget else { throw ProjectError.invalid("This review exceeds the model's context budget. Shorten the brief, review a smaller passage, or lower Maximum output in MLX settings.") }

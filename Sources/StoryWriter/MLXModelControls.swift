@@ -50,6 +50,8 @@ struct MLXModelControls: View {
                     Button("Release memory") { library.unload() }
                     Button("Remove model…") { library.removeSelected() }
                 }.disabled(library.busy)
+                Button("Test English & German") { library.testSelected() }.disabled(library.busy)
+                Text("Checks two sample sentences without using your manuscript. Passing these checks does not guarantee accurate reviews.").font(.caption).foregroundStyle(.secondary)
             }
         }.disabled(!MLXWritingModel.available)
         Section("MLX generation settings") {

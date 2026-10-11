@@ -95,18 +95,54 @@ struct MLXModelStore: Sendable {
         let fm = FileManager.default
         let entries = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
         var bytes: Int64 = 0
+        var regularFiles: [String: Int64] = [:]
         for entry in entries {
             let values = try entry.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey, .fileSizeKey])
             guard values.isSymbolicLink != true else { throw ProjectError.invalid("Import a model folder containing actual files, rather than symbolic links.") }
-            if values.isRegularFile == true { bytes += Int64(values.fileSize ?? 0) }
+            if values.isRegularFile == true {
+                let size = Int64(values.fileSize ?? 0)
+                regularFiles[entry.lastPathComponent] = size
+                bytes += size
+            }
         }
         for name in ["config.json", "tokenizer.json", "tokenizer_config.json"] {
-            let file = directory.appendingPathComponent(name)
-            guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { throw ProjectError.invalid("The model folder needs \(name).") }
+            guard let size = regularFiles[name], size > 0 else { throw ProjectError.invalid("The model folder needs a nonempty \(name).") }
+            guard (try? JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent(name)))) is [String: Any] else {
+                throw ProjectError.invalid("The model's \(name) is not a valid JSON object. Download or import the complete model again.")
+            }
         }
         let config = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("config.json"))) as? [String: Any]
-        guard config?["model_type"] is String, entries.contains(where: { $0.pathExtension == "safetensors" && ((try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) > 0 }) else {
+        let weights = regularFiles.filter { ($0.key as NSString).pathExtension == "safetensors" }
+        guard let modelType = config?["model_type"] as? String, !modelType.isEmpty,
+              !weights.isEmpty, weights.values.allSatisfy({ $0 > 0 }) else {
             throw ProjectError.invalid("Choose an MLX model folder with config.json, tokenizer files, and nonempty safetensors weights.")
+        }
+        if regularFiles["model.safetensors.index.json"] != nil {
+            struct WeightIndex: Decodable { var weight_map: [String: String] }
+            let data = try Data(contentsOf: directory.appendingPathComponent("model.safetensors.index.json"))
+            guard let index = try? JSONDecoder().decode(WeightIndex.self, from: data), !index.weight_map.isEmpty else {
+                throw ProjectError.invalid("The model's weight index is invalid. Download or import the complete model again.")
+            }
+            for shard in Set(index.weight_map.values).sorted() {
+                guard !shard.contains("/"), !shard.contains("\\"), weights[shard] != nil else {
+                    throw ProjectError.invalid("The model is missing a weight shard listed in its index. Download or import the complete model again.")
+                }
+            }
+        }
+        // Also catch partial numbered downloads when the index was omitted.
+        let pattern = try NSRegularExpression(pattern: #"^(.*)-(\d{5})-of-(\d{5})\.safetensors$"#)
+        for name in weights.keys {
+            let string = name as NSString
+            guard let match = pattern.firstMatch(in: name, range: NSRange(location: 0, length: string.length)) else { continue }
+            let prefix = string.substring(with: match.range(at: 1))
+            let count = Int(string.substring(with: match.range(at: 3))) ?? 0
+            guard count > 0, count <= weights.count else {
+                throw ProjectError.invalid("The model folder contains an incomplete set of weight shards.")
+            }
+            for number in 1...count {
+                let shard = String(format: "%@-%05d-of-%05d.safetensors", prefix, number, count)
+                guard weights[shard] != nil else { throw ProjectError.invalid("The model folder is missing \(shard).") }
+            }
         }
         return bytes
     }

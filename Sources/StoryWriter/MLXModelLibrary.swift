@@ -128,6 +128,28 @@ final class MLXModelLibrary: ObservableObject {
             } catch { report(error) }
         }
     }
+    func testSelected() {
+        guard !busy, let model = selectedModel else { return }
+        busy = true; error = nil
+        let settings = settings.validated
+        operation = Task {
+            defer { busy = false; operation = nil }
+            do {
+                var results: [Bool] = []
+                for sample in [MLXModelQualityCheck.english, MLXModelQualityCheck.german] {
+                    try Task.checkCancellation()
+                    status = "Testing \(sample.language == "en" ? "English" : "German") proofreading with \(model.name)…"
+                    let issues = try await MLXWritingModel.shared.review(text: sample.text, language: sample.language,
+                        model: model, directory: store.directory(for: model), settings: settings,
+                        context: WritingReviewContext(), includeStyle: false)
+                    results.append(sample.catchesError(issues))
+                }
+                try Task.checkCancellation()
+                status = "English: \(results[0] ? "error corrected" : "error missed") · German: \(results[1] ? "error corrected" : "error missed"). "
+                    + (results.allSatisfy { $0 } ? "Both sample checks passed. Review suggestions before accepting." : "Try another model for languages where the error was missed.")
+            } catch { report(error) }
+        }
+    }
     func unload() {
         guard !busy else { return }
         busy = true
