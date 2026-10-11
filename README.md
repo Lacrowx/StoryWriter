@@ -52,6 +52,12 @@ Select text to change its font, size, bold (⌘B), italic (⌘I), underline (⌘
 
 The magnifying glass opens native find and replace inside the current chapter (⌘F). **Find in manuscript** filters the outline by chapter title, synopsis, and body text. Chapter notes and status are behind the notes icon beside the chapter title.
 
+StoryWriter remembers your selected project, chapter, and workspace tab on this Mac. Returning to a project resumes that chapter; if it has been removed, the first remaining chapter opens. These navigation preferences stay outside portable projects and saved revisions.
+
+The chapter outline labels each drafting status and lets you filter by **Planned**, **Drafting**, **Revising**, or **Ready**. Search works within the chosen status; **Show all chapters** clears both filters. Drag to reorder with **All chapters** selected, or use **Move up / Move down** from a chapter's menu. The status menu below the paper changes the current chapter's status directly.
+
+Choose **Tools** beside the chapter title to open research, scenes, revision comments, or character continuity beside your writing. Click the word progress control in the bottom bar for manuscript totals, chapter counts by status, and **Edit goal**. A goal of 0 turns off the word target; goals autosave with the project and remain available under **Story**. Library rows show progress toward each story's word goal.
+
 Import chapters through the outline's + menu. Supported chapter imports are DOCX, RTF, RTFD, HTML, UTF-8 text, and Markdown. Markdown imports currently preserve the source as plain text, rather than interpreting its syntax.
 
 ## Tagging objects in your writing
@@ -168,7 +174,7 @@ STORYWRITER_TEST_APPLE=1 zsh scripts/test.sh --filter testLiveAppleOnDeviceWriti
 
 ## Connected writing tools
 
-- **Beside your writing:** the sidebar button beside the chapter title opens Research, Scenes, and Notes. Choose a character, world entry, or reference to pin it beside your manuscript. Choose **Open full profile** in an object tag’s detail bubble to open its details in this panel. Characters, world entries, and reference lists also offer **Pin beside manuscript** in their right-click menus.
+- **Beside your writing:** the **Tools** menu beside the chapter title opens Research, Scenes, revision comments, and character continuity. Choose a character, world entry, or reference to pin it beside your manuscript. Choose **Open full profile** in an object tag’s detail bubble to open its details in this panel. Characters, world entries, and reference lists also offer **Pin beside manuscript** in their right-click menus.
 - **Aliases and appearances:** character and world profiles accept comma-separated aliases. Tag suggestions and local name recognition understand those aliases. **Appears in** lists explicitly tagged passages and name matches separately; click an entry to select that passage. A name match is a navigation aid, not proof of the character's identity.
 - **Passage search:** the outline now shows matching passage previews rather than only filtering chapter titles. **Search** at the top of the project (⇧⌘G) also finds character profiles, world details, and reference notes. Choose a result to open and select its matching text.
 - **Scenes:** open the writing panel's Scenes tab. Place the cursor inside a chapter and choose **Split at cursor**, or add a single scene for the entire chapter. Scene cards offer Move earlier/later, Merge with previous, and details for synopsis, viewpoint, location, status, story time, and timeline order. Moving scenes preserves formatted text, tags, and comments, adding paragraph spacing at new joins when needed. Splitting and merging preserve the continuous manuscript; scene labels are not added to exports.

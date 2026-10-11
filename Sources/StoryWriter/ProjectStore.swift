@@ -17,7 +17,9 @@ struct Revision: Identifiable {
 @MainActor
 final class ProjectStore: ObservableObject {
     @Published var projects: [StoryProject] = []
-    @Published var selectedProjectID: UUID?
+    @Published var selectedProjectID: UUID? {
+        didSet { workspacePreferences.projectID = selectedProjectID }
+    }
     @Published var saveStatus = "Saved on this Mac"
     @Published var errorMessage: String?
     @Published var search = ""
@@ -27,13 +29,16 @@ final class ProjectStore: ObservableObject {
     var backupGenerations: [UUID: UUID] = [:]
     var backupRunning = Set<UUID>()
     let root: URL
+    private let workspaceDefaults: UserDefaults
+    var workspacePreferences: WorkspacePreferences { WorkspacePreferences(root: root, defaults: workspaceDefaults) }
     private var saveTask: Task<Void, Never>?
     private var dirty = Set<UUID>()
     private var lastRevision: [UUID: Date] = [:]
 
-    init(root: URL? = nil, createExample: Bool = true) {
+    init(root: URL? = nil, createExample: Bool = true, workspaceDefaults: UserDefaults = .standard) {
         let override = ProcessInfo.processInfo.environment["STORYWRITER_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
         self.root = root ?? override ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("StoryWriter/Projects", isDirectory: true)
+        self.workspaceDefaults = workspaceDefaults
         do {
             try FileManager.default.createDirectory(at: self.root, withIntermediateDirectories: true)
             let directories = try FileManager.default.contentsOfDirectory(at: self.root, includingPropertiesForKeys: nil).filter { $0.pathExtension == "storywriter" }
@@ -46,7 +51,8 @@ final class ProjectStore: ObservableObject {
             }
             projects.sort { $0.modifiedAt > $1.modifiedAt }
             if directories.isEmpty && createExample { let example = StoryProject.example(); projects.append(example); dirty.insert(example.id); _ = saveNow() }
-            selectedProjectID = projects.first(where: { !$0.archived })?.id
+            selectedProjectID = projects.first(where: { $0.id == workspacePreferences.projectID && !$0.archived })?.id
+                ?? projects.first(where: { !$0.archived })?.id
             loadBackupSettings()
             for project in projects { scheduleBackup(project.id) }
         } catch { errorMessage = error.localizedDescription }
@@ -54,7 +60,13 @@ final class ProjectStore: ObservableObject {
 
     var selectedProject: StoryProject? { projects.first { $0.id == selectedProjectID } }
     var visibleProjects: [StoryProject] {
-        projects.filter { $0.archived == showArchived && (search.isEmpty || [$0.title, $0.author, $0.genre, $0.premise].joined(separator: " ").localizedCaseInsensitiveContains(search)) }
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return projects.filter { $0.archived == showArchived && (query.isEmpty || [$0.title, $0.author, $0.genre, $0.premise].joined(separator: " ").localizedCaseInsensitiveContains(query)) }
+    }
+
+    func toggleArchivedProjects() {
+        showArchived.toggle()
+        selectedProjectID = visibleProjects.first?.id
     }
 
     func project(_ id: UUID) -> StoryProject? { projects.first { $0.id == id } }
@@ -78,6 +90,7 @@ final class ProjectStore: ObservableObject {
 
     @discardableResult func create(title: String, kind: ProjectKind) -> UUID {
         let project = StoryProject.new(title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled \(kind.label.lowercased())" : title, kind: kind)
+        showArchived = false; search = ""
         projects.insert(project, at: 0); selectedProjectID = project.id; dirty.insert(project.id); _ = saveNow()
         return project.id
     }
@@ -138,7 +151,7 @@ final class ProjectStore: ObservableObject {
         do {
             var imported = try Self.readPackage(url)
             let local = packageURL(imported.id)
-            if url.standardizedFileURL == local.standardizedFileURL { selectedProjectID = imported.id; return }
+            if url.standardizedFileURL == local.standardizedFileURL { showArchived = imported.archived; search = ""; selectedProjectID = imported.id; return }
             imported.id = UUID(); imported.archived = false; imported.modifiedAt = Date()
             let destination = packageURL(imported.id)
             try FileManager.default.copyItem(at: url, to: destination)
@@ -148,6 +161,7 @@ final class ProjectStore: ObservableObject {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
             try encoder.encode(imported).write(to: destination.appendingPathComponent("project.json"), options: .atomic)
             lastRevision[imported.id] = Date()
+            showArchived = false; search = ""
             projects.insert(imported, at: 0); dirty.insert(imported.id); selectedProjectID = imported.id; _ = saveNow()
         } catch { errorMessage = "Could not import project: \(error.localizedDescription)" }
     }

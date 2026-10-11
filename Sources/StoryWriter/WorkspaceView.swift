@@ -44,6 +44,7 @@ struct ProjectWorkspace: View {
     @State private var pinned: PinnedResearch?
     @State private var destination: StoryDestination?
     @State private var continuityRequest: ContinuityRequest?
+    @State private var restoredNavigation = false
     @AppStorage("readingWidth") private var readingWidth = ReadingWidth.medium.rawValue
     @AppStorage("readingZoom") private var readingZoom = 1.0
     @AppStorage("dimPaper") private var dimPaper = false
@@ -124,7 +125,7 @@ struct ProjectWorkspace: View {
                     Text(store.saveStatus)
                     if let backup = store.backupConfigurations[projectID] { Text("·"); Image(systemName: backup.error == nil ? "externaldrive.badge.checkmark" : "exclamationmark.triangle").foregroundStyle(backup.error == nil ? Color.secondary : .orange).help(store.backupStatus(projectID)); Text(backup.error == nil ? (backup.lastSuccess.map { "Backed up " + $0.formatted(date: .omitted, time: .shortened) } ?? "First backup pending") : "Backup needs attention").help(store.backupStatus(projectID)) }
                     Spacer()
-                    if project.kind == .story { Text("\(project.wordCount.formatted()) words in story"); Text("·"); Text("\(project.chapters.filter { $0.status == .ready }.count) / \(project.chapters.count) chapters ready") }
+                    if project.kind == .story { WritingProgressButton(project: project) }
                     else { Text("\(project.sources.count) references") }
                 }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 24).padding(.vertical, 10)
             }
@@ -151,7 +152,13 @@ struct ProjectWorkspace: View {
             .sheet(isPresented: $showSearch) { ProjectSearchSheet(projectID: projectID).environment(\.navigateStory, navigate) }
             .sheet(isPresented: $showTimeline) { TimelineSheet(projectID: projectID).environment(\.navigateStory, navigate) }
             .sheet(item: $continuityRequest) { request in ContinuityRecordSheet(projectID: projectID, request: request) }
-            .onChange(of: section) { _, _ in reviewFocus.activate(nil) }
+            .onChange(of: section) { _, value in
+                reviewFocus.activate(nil)
+                if restoredNavigation { store.workspacePreferences.rememberSection(value, in: projectID) }
+            }
+            .onChange(of: chapterID) { _, value in
+                if restoredNavigation { store.workspacePreferences.rememberChapter(value, in: projectID) }
+            }
             .onChange(of: panelTab) { _, _ in reviewFocus.activate(nil) }
             .sheet(isPresented: $showExport) { ExportSheet(projectID: projectID, chapterID: chapterID) }
             .sheet(isPresented: $showHistory) { RevisionHistorySheet(projectID: projectID).environment(\.navigateStory, navigate) }
@@ -160,7 +167,12 @@ struct ProjectWorkspace: View {
             .sheet(isPresented: $showWritingBrief) { WritingBriefSheet(projectID: projectID, initialBrief: project.aiWritingBrief) }
             .sheet(item: $taggedObject) { reference in ProjectObjectDetailsSheet(projectID: projectID, reference: reference).environment(\.writingReviewContext, project.reviewContext()) }
             .onReceive(NotificationCenter.default.publisher(for: .exportManuscript)) { _ in if project.kind == .story { showExport = true } }
-            .onAppear { chapterID = project.chapters.first?.id }
+            .onAppear {
+                guard !restoredNavigation else { return }
+                chapterID = store.workspacePreferences.chapterID(in: project)
+                section = project.kind == .research ? .references : store.workspacePreferences.section(in: projectID)
+                restoredNavigation = true
+            }
             .onChange(of: project.chapters.map(\.id)) { _, ids in if !ids.contains(chapterID ?? UUID()) { chapterID = ids.first } }
             .onChange(of: project.aiWritingBrief) { _, _ in
                 if section == .manuscript, LocalGrammarService.shared.automatic {
@@ -307,12 +319,16 @@ struct ProjectWorkspace: View {
                         WritingTextArea(text: store.itemBinding(projectID, \.chapters, id: chapter.id, fallback: chapter).title, height: 28, label: "chapter title", fontSize: 17, compact: true, chrome: true).environment(\.grammarNamespace, chapter.id.uuidString)
                         Spacer(minLength: 0)
                         HStack(spacing: 16) {
-                        Button { showProofreader = false; showPanel.toggle() } label: { Image(systemName: "sidebar.right").foregroundStyle(showPanel ? Color.accentColor : .primary) }.help("Research, scenes, passage comments, and character continuity")
                         Menu {
+                            Button("Research") { openPanel(.research) }
+                            Button("Scenes") { openPanel(.scenes) }
+                            Button("Character continuity") { openPanel(.continuity) }
+                            Button("Revision comments") { openPanel(.comments) }
+                            Divider()
                             Button("Add comment to selection") { if let view = editor.textView { addComment(chapterID: chapter.id, range: view.selectedRange(), expectedText: view.string) } }.disabled(editor.selectionText.isEmpty)
-                            Button("Show revision comments") { showPanel = true; panelTab = .comments }
-                            Button("Plan scenes") { showPanel = true; panelTab = .scenes }
-                        } label: { Image(systemName: "text.bubble") }.menuStyle(.borderlessButton).frame(width: 18).help("Passage comments and scenes")
+                            if showPanel { Divider(); Button("Hide writing sidebar") { showPanel = false } }
+                        } label: { Label("Tools", systemImage: "sidebar.right").foregroundStyle(showPanel ? Color.accentColor : .primary) }
+                            .menuStyle(.borderlessButton).fixedSize().help("Research, scenes, comments, and character continuity beside your writing")
                         Button { showChapterNotes.toggle() } label: { Image(systemName: "note.text") }.help("Chapter synopsis & status")
                         Button {
                             do { try ExportService.copyForWebsite(chapter); copied = true; Task { try? await Task.sleep(nanoseconds: 2_000_000_000); copied = false } }
@@ -348,7 +364,7 @@ struct ProjectWorkspace: View {
                         .frame(width: min(geometry.size.width, (ReadingWidth(rawValue: readingWidth) ?? .medium).points), height: geometry.size.height)
                         .background(ManuscriptPaper())
                         .clipShape(RoundedRectangle(cornerRadius: 3))
-                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.white.opacity(0.7), lineWidth: 0.5))
+                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.white.opacity(dimPaper ? 0.12 : 0.7), lineWidth: 0.5))
                         .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 9)
                         .frame(maxWidth: .infinity, alignment: .center)
                     }.padding(.horizontal, 20).padding(.bottom, 14)
@@ -362,7 +378,14 @@ struct ProjectWorkspace: View {
                         Text("\(chapter.wordCount.formatted()) words")
                         if editor.selectionWords > 0 { Text("· \(editor.selectionWords) selected") }
                         Spacer()
-                        Text(chapter.status.rawValue).foregroundStyle(chapter.status == .ready ? Color.accentColor : .secondary)
+                        Menu {
+                            ForEach(DraftStatus.allCases) { status in
+                                Button {
+                                    store.update(projectID) { if let index = $0.chapters.firstIndex(where: { $0.id == chapter.id }) { $0.chapters[index].status = status } }
+                                } label: { Label(status.rawValue, systemImage: chapter.status == status ? "checkmark" : status.symbol) }
+                            }
+                        } label: { Label(chapter.status.rawValue, systemImage: chapter.status.symbol).foregroundStyle(chapter.status.color) }
+                            .menuStyle(.borderlessButton).fixedSize().help("Change chapter status")
                     }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 28).padding(.vertical, 10)
                 }.frame(maxWidth: .infinity)
                 if showProofreader { Divider(); ProofreadingPanel(editor: editor, chapter: chapter) }
@@ -383,6 +406,9 @@ struct ProjectWorkspace: View {
         case .reference: section = .references
         }
     }
+    private func openPanel(_ tab: WritingPanelTab) {
+        showProofreader = false; showPanel = true; panelTab = tab
+    }
     private func addChapter() { let chapter = Chapter(title: "Chapter \((store.project(projectID)?.chapters.count ?? 0) + 1)"); store.update(projectID) { $0.chapters.append(chapter) }; chapterID = chapter.id }
 }
 
@@ -401,28 +427,57 @@ struct ChapterOutline: View {
     var onNavigate: (StoryDestination) -> Void = { _ in }
     @State private var deleteID: UUID?
     @State private var search = ""
+    @State private var statusFilter: DraftStatus?
+    private var query: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("CHAPTERS").font(.system(size: 10, weight: .semibold)).tracking(1.3).foregroundStyle(.secondary)
                 Spacer()
-                Menu { Button("Add chapter", action: add); Button("Import chapter…") { Panels.importChapter(projectID, store: store) } } label: { Image(systemName: "plus") }.menuStyle(.borderlessButton).frame(width: 20)
+                Menu { Button("Add chapter", action: add); Button("Import chapter…") { Panels.importChapter(projectID, store: store) } } label: { Image(systemName: "plus") }.menuStyle(.borderlessButton).frame(width: 20).help("Add or import a chapter")
             }.padding(18)
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Find in manuscript", text: $search).textFieldStyle(.plain)
+                if !search.isEmpty {
+                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .buttonStyle(.plain).help("Clear manuscript search").accessibilityLabel("Clear manuscript search")
+                }
             }.font(.caption).padding(10).background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 12).padding(.bottom, 10)
             if let project = store.project(projectID) {
-                if !search.isEmpty {
-                    let results = StorySearch.results(in: project, query: search, manuscriptOnly: true)
-                    Text("\(results.count) matches").font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 18)
-                    ScrollView { LazyVStack(alignment: .leading) { ForEach(results) { result in Button { onNavigate(result.destination) } label: { PassageResultRow(result: result, query: search) }.buttonStyle(.plain).padding(.horizontal, 16); Divider() } } }
+                Menu {
+                    Button { statusFilter = nil } label: { Label("All chapters", systemImage: statusFilter == nil ? "checkmark" : "line.3.horizontal.decrease") }
+                    Divider()
+                    ForEach(DraftStatus.allCases) { status in
+                        Button { statusFilter = status } label: {
+                            Label("\(status.rawValue) (\(project.chapters.filter { $0.status == status }.count))", systemImage: statusFilter == status ? "checkmark" : status.symbol)
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Label(statusFilter?.rawValue ?? "All chapters", systemImage: statusFilter?.symbol ?? "line.3.horizontal.decrease")
+                        Spacer()
+                        Text(project.chapters.filter { statusFilter == nil || $0.status == statusFilter }.count.formatted()).foregroundStyle(.secondary)
+                    }.font(.caption)
+                }.menuStyle(.borderlessButton).padding(.horizontal, 18).padding(.bottom, 10).help("Filter chapters by drafting status")
+                if !query.isEmpty {
+                    let results = StorySearch.results(in: project, query: query, manuscriptOnly: true).filter { result in
+                        statusFilter == nil || project.chapters.first(where: { $0.id == result.destination.itemID })?.status == statusFilter
+                    }
+                    Text("\(results.count) \(results.count == 1 ? "match" : "matches")").font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 18).padding(.bottom, 8)
+                    if results.isEmpty { noMatches }
+                    else {
+                        ScrollView { LazyVStack(alignment: .leading) { ForEach(results) { result in Button { onNavigate(result.destination) } label: { PassageResultRow(result: result, query: query) }.buttonStyle(.plain).padding(.horizontal, 16); Divider() } } }
+                    }
                 } else {
+                let chapters = Array(project.chapters.enumerated()).filter { statusFilter == nil || $0.element.status == statusFilter }
+                if chapters.isEmpty { noMatches }
+                else {
                 List(selection: $selection) {
-                    ForEach(Array(project.chapters.enumerated()).filter { search.isEmpty || [$0.element.title, $0.element.synopsis, $0.element.plainText].joined(separator: " ").localizedCaseInsensitiveContains(search) }, id: \.element.id) { index, chapter in
+                    ForEach(chapters, id: \.element.id) { index, chapter in
                         VStack(alignment: .leading, spacing: 7) {
-                            HStack { Text(String(format: "%02d", index + 1)).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Color.accentColor); Spacer(); Circle().fill(chapter.status == .ready ? Color.accentColor : chapter.status == .planned ? Color.gray.opacity(0.3) : Color.orange.opacity(0.7)).frame(width: 5, height: 5) }
+                            HStack { Text(String(format: "%02d", index + 1)).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Color.accentColor); Spacer(); Label(chapter.status.rawValue, systemImage: chapter.status.symbol).font(.system(size: 9, weight: .medium)).foregroundStyle(chapter.status.color) }
                             Text(chapter.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
                             if !chapter.synopsis.isEmpty { Text(chapter.synopsis).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2) }
                             Text("\(chapter.wordCount.formatted()) words").font(.system(size: 10)).foregroundStyle(.tertiary)
@@ -435,16 +490,31 @@ struct ChapterOutline: View {
                                 Button("Duplicate chapter") { var copy = chapter; copy.id = UUID(); copy.title += " (copy)"; if var scenes = copy.scenes { for i in scenes.indices { scenes[i].id = UUID() }; copy.scenes = scenes }; if var comments = copy.comments { for i in comments.indices { comments[i].id = UUID() }; copy.comments = comments }; if var events = copy.continuityEvents { for i in events.indices { events[i].id = UUID() }; copy.continuityEvents = events }; store.update(projectID) { $0.chapters.insert(copy, at: index + 1) }; selection = copy.id }
                                 Divider(); Button("Delete chapter…", role: .destructive) { deleteID = chapter.id }
                                 Divider(); AppContextMenuItems()
-                            }.moveDisabled(!search.isEmpty)
-                    }.onMove { offsets, destination in store.update(projectID) { $0.chapters.move(fromOffsets: offsets, toOffset: destination) } }
+                            }.moveDisabled(statusFilter != nil)
+                    }.onMove { offsets, destination in
+                        guard statusFilter == nil else { return }
+                        store.update(projectID) { $0.chapters.move(fromOffsets: offsets, toOffset: destination) }
+                    }
                 }.listStyle(.sidebar).scrollContentBackground(.hidden)
+                }
                 }
             }
             Button(action: add) { Label("Add chapter", systemImage: "plus") }.buttonStyle(.plain).font(.caption).foregroundStyle(Color.accentColor).padding(18)
         }.background(DesktopMaterial())
         .confirmationDialog("Delete this chapter? Saved revisions can recover earlier writing.", isPresented: Binding(get: { deleteID != nil }, set: { if !$0 { deleteID = nil } })) { Button("Delete chapter", role: .destructive) { if let deleteID { store.update(projectID) { $0.chapters.removeAll { $0.id == deleteID } } }; deleteID = nil } }
     }
-    private func add() { let chapter = Chapter(title: "Chapter \((store.project(projectID)?.chapters.count ?? 0) + 1)"); store.update(projectID) { $0.chapters.append(chapter) }; selection = chapter.id }
+    private var noMatches: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "doc.text.magnifyingglass").font(.title2).foregroundStyle(.secondary)
+            Text(query.isEmpty && statusFilter == nil ? "No chapters yet" : "No matching chapters").font(.callout)
+            Text(query.isEmpty ? "Add a chapter or choose another status." : "Try another phrase or chapter status.")
+                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if !query.isEmpty || statusFilter != nil {
+                Button("Show all chapters") { search = ""; statusFilter = nil }.buttonStyle(.link).font(.caption)
+            }
+        }.padding(18).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    private func add() { search = ""; statusFilter = nil; let chapter = Chapter(title: "Chapter \((store.project(projectID)?.chapters.count ?? 0) + 1)"); store.update(projectID) { $0.chapters.append(chapter) }; selection = chapter.id }
     private func move(_ id: UUID, offset: Int) { store.update(projectID) { project in guard let index = project.chapters.firstIndex(where: { $0.id == id }), project.chapters.indices.contains(index + offset) else { return }; project.chapters.swapAt(index, index + offset) } }
 }
 
@@ -462,9 +532,13 @@ struct StoryOverview: View {
                         MetricCard(value: "\(project.characters.count)", label: "Characters", symbol: "person.2")
                     }
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack { Text("Writing goal").font(.headline); Spacer(); Text("\(project.wordCount.formatted()) of \(project.targetWords.formatted()) words").foregroundStyle(.secondary).font(.caption) }
-                        ProgressView(value: Double(min(project.wordCount, max(1, project.targetWords))), total: Double(max(1, project.targetWords)))
-                        HStack { Text("Target").foregroundStyle(.secondary); TextField("Words", value: store.binding(projectID, \.targetWords, fallback: project.targetWords), format: .number).frame(width: 100).textFieldStyle(.roundedBorder); Text("words").foregroundStyle(.secondary) }.font(.caption)
+                        HStack { Text("Writing goal").font(.headline); Spacer(); Text(project.targetWords > 0 ? "\(project.wordCount.formatted()) of \(project.targetWords.formatted()) words" : "No word goal").foregroundStyle(.secondary).font(.caption) }
+                        if project.targetWords > 0 { ProgressView(value: min(1, Double(project.wordCount) / Double(project.targetWords))) }
+                        HStack {
+                            Text("Target").foregroundStyle(.secondary)
+                            TextField("Words", value: Binding(get: { project.targetWords }, set: { value in store.update(projectID) { $0.targetWords = max(0, value) } }), format: .number).frame(width: 100).textFieldStyle(.roundedBorder)
+                            Text("words · 0 for no goal").foregroundStyle(.secondary)
+                        }.font(.caption)
                     }.cardSurface()
                     HStack(alignment: .top, spacing: 18) {
                         VStack(spacing: 18) { LabeledField("Title", text: bind(\.title, project)); LabeledField("Genre", text: bind(\.genre, project), placeholder: "Mystery, fantasy, romance…") }.frame(maxWidth: .infinity)
