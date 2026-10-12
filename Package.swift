@@ -16,7 +16,8 @@ if let override = Context.environment["STORYWRITER_DISABLE_MLX"] {
 let mlxDependencies: [Target.Dependency] = mlxEnabled ? [
     .product(name: "MLXLLM", package: "mlx-swift-lm"),
     .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
-    .product(name: "MLX", package: "mlx-swift")
+    .product(name: "MLX", package: "mlx-swift"),
+    .product(name: "Tokenizers", package: "swift-transformers")
 ] : []
 
 let package = Package(
@@ -25,8 +26,9 @@ let package = Package(
     products: [.executable(name: "StoryWriter", targets: ["StoryWriter"])],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm", exact: "2.31.3"),
-        .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.31.3"),
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", exact: "3.32.3"),
+        .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.32.3"),
+        .package(url: "https://github.com/huggingface/swift-transformers", exact: "1.3.4"),
         // Keep transitive resolution compatible with the Swift 6.2 CI floor.
         .package(url: "https://github.com/apple/swift-collections.git", exact: "1.3.0")
     ],

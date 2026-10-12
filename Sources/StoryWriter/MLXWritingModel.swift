@@ -4,6 +4,29 @@ import MLX
 import Metal
 import MLXLLM
 import MLXLMCommon
+import Tokenizers
+
+// mlx-swift-lm 3 takes tokenizers through a protocol; bridge swift-transformers
+// directly instead of pulling in the Hugging Face downloader and macros.
+private struct LocalTokenizerLoader: MLXLMCommon.TokenizerLoader {
+    func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
+        TokenizerBridge(upstream: try await AutoTokenizer.from(modelFolder: directory))
+    }
+}
+private struct TokenizerBridge: MLXLMCommon.Tokenizer {
+    let upstream: any Tokenizers.Tokenizer
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] { upstream.encode(text: text, addSpecialTokens: addSpecialTokens) }
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String { upstream.decode(tokens: tokenIds, skipSpecialTokens: skipSpecialTokens) }
+    func convertTokenToId(_ token: String) -> Int? { upstream.convertTokenToId(token) }
+    func convertIdToToken(_ id: Int) -> String? { upstream.convertIdToToken(id) }
+    var bosToken: String? { upstream.bosToken }
+    var eosToken: String? { upstream.eosToken }
+    var unknownToken: String? { upstream.unknownToken }
+    func applyChatTemplate(messages: [[String: any Sendable]], tools: [[String: any Sendable]]?, additionalContext: [String: any Sendable]?) throws -> [Int] {
+        do { return try upstream.applyChatTemplate(messages: messages, tools: tools, additionalContext: additionalContext) }
+        catch Tokenizers.TokenizerError.missingChatTemplate { throw MLXLMCommon.TokenizerError.missingChatTemplate }
+    }
+}
 #endif
 
 actor MLXWritingModel {
@@ -84,7 +107,7 @@ actor MLXWritingModel {
         let config = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("config.json"))) as? [String: Any]
         contextLimit = MLXContextBudget.contextLimit(config: config ?? [:])
         do {
-            container = try await LLMModelFactory.shared.loadContainer(configuration: .init(directory: directory))
+            container = try await LLMModelFactory.shared.loadContainer(from: directory, using: LocalTokenizerLoader())
             loadedID = model.id
             try Task.checkCancellation()
         } catch {
@@ -154,7 +177,7 @@ actor MLXWritingModel {
                                 case .cancelled: task.cancel(); completed = false
                                 case .stop: break
                                 }
-                            case .toolCall: break
+                            case .toolCall, .rejectedToolCall: break
                             }
                             if Task.isCancelled { task.cancel() }
                         }
