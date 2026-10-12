@@ -106,11 +106,14 @@ final class MLXModelTests: XCTestCase {
         try Data("fixture".utf8).write(to: source.appendingPathComponent("model-00002-of-00002.safetensors"))
         XCTAssertGreaterThan(try MLXModelStore.validateDirectory(source), 0)
         let index = source.appendingPathComponent("model.safetensors.index.json")
-        for invalid in [#"{"weight_map":{"layer":"missing.safetensors"}}"#, #"{"weight_map":{"layer":"../outside.safetensors"}}"#, #"{"weight_map":{}}"#, "broken"] {
+        for invalid in [#"{"weight_map":{"layer":"missing.safetensors"}}"#, #"{"weight_map":{"layer":"../outside.safetensors"}}"#, #"{"weight_map":{"layer":"nested/../../outside.safetensors"}}"#, #"{"weight_map":{"layer":"optiq/vision.safetensors"}}"#, #"{"weight_map":{}}"#, "broken"] {
             try Data(invalid.utf8).write(to: index)
             XCTAssertThrowsError(try MLXModelStore.validateDirectory(source))
         }
         try Data(#"{"weight_map":{"layer":"model-00001-of-00002.safetensors"}}"#.utf8).write(to: index)
+        XCTAssertGreaterThan(try MLXModelStore.validateDirectory(source), 0)
+        // OptiQ repos index vision weights in a subfolder that downloads skip.
+        try Data(#"{"weight_map":{"layer":"model-00001-of-00002.safetensors","vision_tower.pos_embed":"optiq/optiq_vision.safetensors"}}"#.utf8).write(to: index)
         XCTAssertGreaterThan(try MLXModelStore.validateDirectory(source), 0)
         try Data("not JSON".utf8).write(to: source.appendingPathComponent("tokenizer.json"))
         XCTAssertThrowsError(try MLXModelStore.validateDirectory(source))

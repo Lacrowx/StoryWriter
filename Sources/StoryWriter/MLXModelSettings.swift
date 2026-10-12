@@ -123,8 +123,18 @@ struct MLXModelStore: Sendable {
             guard let index = try? JSONDecoder().decode(WeightIndex.self, from: data), !index.weight_map.isEmpty else {
                 throw ProjectError.invalid("The model's weight index is invalid. Download or import the complete model again.")
             }
-            for shard in Set(index.weight_map.values).sorted() {
-                guard !shard.contains("/"), !shard.contains("\\"), weights[shard] != nil else {
+            let shards = Set(index.weight_map.values)
+            guard shards.allSatisfy({ !$0.contains("\\") && !$0.hasPrefix("/") && !$0.split(separator: "/").contains("..") }) else {
+                throw ProjectError.invalid("The model's weight index is invalid. Download or import the complete model again.")
+            }
+            // Nested shards (e.g. optiq/optiq_vision.safetensors) hold extras
+            // such as vision towers that downloads skip; text weights are top-level.
+            let topLevel = shards.filter { !$0.contains("/") }
+            guard !topLevel.isEmpty else {
+                throw ProjectError.invalid("The model's weight index lists no top-level weights. Choose an MLX text model.")
+            }
+            for shard in topLevel.sorted() {
+                guard weights[shard] != nil else {
                     throw ProjectError.invalid("The model is missing a weight shard listed in its index. Download or import the complete model again.")
                 }
             }
