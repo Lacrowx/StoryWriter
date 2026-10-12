@@ -90,12 +90,18 @@ final class ObjectKnowledgeTests: XCTestCase {
         let subscription = editor.objectWillChange.sink { publications += 1 }
         for offset in 1...20 { view.setSelectedRange(NSRange(location: offset, length: 0)); editor.refresh() }
         XCTAssertEqual(editor.selectionRange.location, 20, "Recording actions use the current position immediately")
+        // Wait for the observable result: a busy CI main actor can run the
+        // 16 ms settle task later than a fixed sleep.
+        func waitForPublication(after count: Int) async throws {
+            let deadline = Date().addingTimeInterval(3)
+            while publications <= count && Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        }
         let initial = publications
-        try await Task.sleep(nanoseconds: 50_000_000)
+        try await waitForPublication(after: initial)
         XCTAssertGreaterThan(publications, initial)
         let settled = publications
         editor.chapterID = UUID(); editor.refresh()
-        try await Task.sleep(nanoseconds: 50_000_000)
+        try await waitForPublication(after: settled)
         XCTAssertGreaterThan(publications, settled)
         withExtendedLifetime(subscription) {}
     }
