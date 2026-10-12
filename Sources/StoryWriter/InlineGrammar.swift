@@ -56,15 +56,28 @@ enum GrammarText {
 
     static func chunks(_ text: String, range: NSRange, limit: Int = 4000) -> [(String, Int)] {
         let string = text as NSString
-        guard NSMaxRange(range) <= string.length, range.length > 0 else { return [] }
+        guard limit > 0, range.location >= 0, NSMaxRange(range) <= string.length,
+              range.length > 0, let swiftRange = Range(range, in: text) else { return [] }
+        // Enumerate once per requested passage. A word boundary can cut off the
+        // verb or subject of a German clause, so prefer complete sentences.
+        var sentenceEnds: [Int] = []
+        text.enumerateSubstrings(in: swiftRange, options: [.bySentences, .substringNotRequired]) { _, _, enclosing, _ in
+            sentenceEnds.append(NSMaxRange(NSRange(enclosing, in: text)))
+        }
+        var sentenceIndex = 0
         var result: [(String, Int)] = [], start = range.location
         while start < NSMaxRange(range) {
             let maximum = min(NSMaxRange(range), start + limit)
             var end = maximum
             if maximum < NSMaxRange(range) {
-                let newline = string.range(of: "\n", options: .backwards, range: NSRange(location: start, length: maximum - start))
-                if newline.location != NSNotFound && newline.location > start { end = newline.location + 1 }
-                else {
+                while sentenceIndex < sentenceEnds.count && sentenceEnds[sentenceIndex] <= start { sentenceIndex += 1 }
+                var candidate = sentenceIndex
+                while candidate < sentenceEnds.count && sentenceEnds[candidate] <= maximum {
+                    end = sentenceEnds[candidate]; candidate += 1
+                }
+                if candidate == sentenceIndex {
+                    // A single sentence exceeding the backend's passage cap
+                    // still needs a bounded, Unicode-safe fallback.
                     let space = string.range(of: " ", options: .backwards, range: NSRange(location: start, length: maximum - start))
                     if space.location != NSNotFound && space.location > start { end = space.location + 1 }
                 }

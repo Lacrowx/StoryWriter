@@ -28,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import german_fiction  # noqa: E402
+from audit_german_dataset import validate_example  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 SOURCES = ROOT / "sources"
@@ -309,20 +310,7 @@ def from_languagetool(wrong, right, prompts, rng):
 
 
 def validate(ex):
-    passage = ex["messages"][1]["content"]
-    issues = json.loads(ex["messages"][2]["content"])["issues"]
-    ranges = []
-    for issue in issues:
-        o = issue["original"]
-        assert passage.count(o) == 1, (o, passage)
-        assert o != issue["replacement"]
-        assert issue["kind"] in {"spelling", "grammar", "style"}
-        start = passage.find(o)
-        ranges.append((start, start + len(o)))
-    if "keine optionalen Stiländerungen" in ex["messages"][0]["content"]:
-        assert all(i["kind"] != "style" for i in issues), passage
-    ranges.sort()
-    assert all(a[1] <= b[0] for a, b in zip(ranges, ranges[1:])), passage
+    validate_example(ex)
 
 
 def main():

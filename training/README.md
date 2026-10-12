@@ -40,3 +40,21 @@ mlx_lm.fuse --model mlx-community/gemma-4-e4b-it-4bit --adapter-path training/ad
 ```
 
 Then use **Import model folder…** in StoryWriter on the fused folder. Judge the result against your own held-out passages, not only `test.jsonl`, whose errors are partly synthetic.
+
+## Check formatting and sentence coverage
+
+Before a new training run, regenerate the data after refreshing the app prompts, then audit it with the tokenizer you will train:
+
+```sh
+python training/audit_german_dataset.py --model training/gemma-4-e4b-de-proofread \
+  --max-seq-length 2048 --require-current-prompts
+python3 -m unittest discover -s training -p 'test_*.py'
+```
+
+Use the Python environment with `transformers` installed for the tokenizer audit. Omit `--model` for a dependency-free JSON/label check. The audit checks chat roles, unique exact quotes, actual wording changes, overlapping edits, style labels, prompt versions, and complete training-example token lengths including assistant replies. It loads no weights. A successful audit checks formatting, not whether every intended correction is linguistically correct.
+
+The supplied Gemma German corpus was audited on 2026-10-12: 51,051 train, 3,398 valid, and 3,042 test examples; no invalid labels or examples above the configured 2,048-token limit. The longest train example was 1,298 tokens. These generated files retain their original prompts until regenerated; refreshing the tracked prompt files does not retrain existing weights.
+
+The app now explicitly checks full sentences before choosing correction excerpts, with whole-sentence examples for missing finite verbs, infinitives, and dependencies across clauses. Long reviews prefer sentence boundaries within the backend's passage cap; a sentence longer than that cap still needs a bounded split. A short suggestion quote does not imply that only those words were sent to the model.
+
+On a four-sentence user passage, the original supplied model returned no usable corrections despite receiving the complete input. Its raw reply quoted an unchanged phrase as a grammar correction; the app discarded it. Whole-sentence prompting improved a missing-infinitive correction in style-enabled review. This is a limited passage check, not evidence of general proofreading accuracy. For the next fine-tune, add editor-checked examples of missing verbs and infinitives, agreement across intervening clauses, and clean sentences with similar wording. The existing synthetic fiction corruptions mostly target local spelling, articles, endings, and punctuation; changing only the prompt cannot add missing training coverage.

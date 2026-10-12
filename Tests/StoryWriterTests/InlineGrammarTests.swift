@@ -162,6 +162,26 @@ final class InlineGrammarTests: XCTestCase {
         XCTAssertEqual(GrammarText.range(for: .document, in: text, selection: selected).length, text.utf16.count)
     }
 
+    func testReviewChunksKeepGermanClausesTogether() {
+        let sentences = [
+            "Sie wartete im Flur. ",
+            "Der Brief, den sie zwischen den alten Karten gefunden hatte, lag noch auf dem Tisch. ",
+            "Er wollte ihn lesen, obwohl seine Hände vor Kälte zitterten. ",
+            "Draußen regnete es."
+        ]
+        let text = sentences.joined()
+        let chunks = GrammarText.chunks(text, range: NSRange(location: 0, length: text.utf16.count), limit: 100)
+        XCTAssertEqual(chunks.map(\.0).joined(), text)
+        for sentence in sentences {
+            XCTAssertTrue(chunks.contains { $0.0.contains(sentence.trimmingCharacters(in: .whitespacesAndNewlines)) }, sentence)
+        }
+        let prefix = "Nicht prüfen.\n"
+        let scoped = GrammarText.chunks(prefix + text, range: NSRange(location: prefix.utf16.count, length: text.utf16.count), limit: 100)
+        XCTAssertEqual(scoped.map(\.0).joined(), text)
+        XCTAssertEqual(scoped.first?.1, prefix.utf16.count)
+        XCTAssertTrue(GrammarText.chunks(text, range: NSRange(location: 0, length: text.utf16.count), limit: 0).isEmpty)
+    }
+
     func testLongDocumentsAreChunkedWithoutLosingUnicode() throws {
         let text = String(repeating: "Grüße 👩🏽‍💻 from the harbour.\n", count: 1000)
         let chunks = GrammarText.chunks(text, range: NSRange(location: 0, length: text.utf16.count), limit: 128)
