@@ -68,6 +68,16 @@ ditto "$task_artifact_dir/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framewo
 cp "$task_artifact_dir/LICENSE" "$task_app_dir/Contents/Resources/Sparkle-LICENSE"
 cp Resources/Info.plist "$task_app_dir/Contents/Info.plist"
 task_plist="$task_app_dir/Contents/Info.plist"
+# Local builds match the newest release tag (CI uses 0.2.<run> and build
+# 1000 + run), so Sparkle offers newer releases instead of replacing a local
+# build with the release it was built from.
+if [[ -z "${STORYWRITER_VERSION:-}" ]]; then
+    task_latest_tag=$(git tag --list 'v0.2.*' --sort=-v:refname 2>/dev/null | head -1)
+    if [[ -n "$task_latest_tag" ]]; then
+        STORYWRITER_VERSION="${task_latest_tag#v}-local"
+        STORYWRITER_BUILD_NUMBER="${STORYWRITER_BUILD_NUMBER:-$((1000 + ${task_latest_tag##*.}))}"
+    fi
+fi
 if [[ -n "${STORYWRITER_VERSION:-}" ]]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $STORYWRITER_VERSION" "$task_plist"
 fi
