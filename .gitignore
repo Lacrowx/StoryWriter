@@ -4,3 +4,8 @@ dist/
 .DS_Store
 __pycache__/
 *.pyc
+training/sources/
+training/data/
+training/adapters*/
+training/*-de-proofread/
+training/.venv/

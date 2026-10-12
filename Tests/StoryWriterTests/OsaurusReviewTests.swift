@@ -17,6 +17,32 @@ final class OsaurusReviewTests: XCTestCase {
         XCTAssertTrue(try OsaurusClient.parseIssues(#"{"issues":[]}"#, passage: passage).isEmpty)
     }
 
+    func testGermanPromptExamplesAreValidReviews() throws {
+        let context = WritingReviewContext()
+        XCTAssertTrue(WritingReviewPrompt.system(language: "de", context: context, includeStyle: true).contains("mit den alten Boot"))
+        XCTAssertFalse(WritingReviewPrompt.system(language: "en", context: context, includeStyle: true).contains("mit den alten Boot"))
+        for example in WritingReviewPrompt.germanExamples {
+            let issues = try OsaurusClient.parseIssues(example.json, passage: example.text)
+            XCTAssertEqual(issues.count, example.json.contains("original") ? 1 : 0, example.text)
+        }
+    }
+
+    // training/build_german_dataset.py trains on these exact prompts. Set
+    // STORYWRITER_WRITE_TRAINING_PROMPTS=1 to refresh them after prompt edits.
+    func testGermanTrainingPromptsMatchApp() throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../training/prompts").standardized
+        let context = WritingReviewContext(document: "chapter prose").forPassage("Text")
+        for (name, style) in [("de-style.txt", true), ("de-grammar.txt", false)] {
+            let prompt = WritingReviewPrompt.system(language: "de", context: context, includeStyle: style)
+            let file = directory.appendingPathComponent(name)
+            if ProcessInfo.processInfo.environment["STORYWRITER_WRITE_TRAINING_PROMPTS"] == "1" {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try prompt.write(to: file, atomically: true, encoding: .utf8)
+            }
+            XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), prompt, "Run with STORYWRITER_WRITE_TRAINING_PROMPTS=1 and rebuild the training data.")
+        }
+    }
+
     func testSparseResponsesStillRejectAmbiguousQuotesAndIgnoreWhitespace() throws {
         XCTAssertThrowsError(try OsaurusClient.parseIssues(#"{"issues":[{"original":"Go home.","replacement":"Head home.","kind":"style"}]}"#, passage: "Go home. Go home."))
         XCTAssertThrowsError(try OsaurusClient.parseIssues(#"{"issues":[{"original":"Not in input","replacement":"New text"}]}"#, passage: "Hello."))
