@@ -57,7 +57,15 @@ final class PencilCommentLayer {
     var attached: [PassageComment] { guard enabled, let view else { return [] }; return PencilComments.attached(comments, to: view.string) }
 
     init(view: ManuscriptTextView) { self.view = view }
-    func invalidate() { needsRebuild = true; view?.needsLayout = true }
+    func invalidate() {
+        needsRebuild = true
+        // Empty margins have no geometry to update. Forcing NSTextView layout
+        // here also invalidates input-method coordinates on every keystroke.
+        if !notes.isEmpty || !marks.isEmpty || !connectors.isEmpty ||
+            (enabled && comments.contains(where: { !$0.resolved && !$0.detached })) {
+            view?.needsLayout = true
+        }
+    }
     func update(_ comments: [PassageComment], enabled: Bool, change: @escaping (UUID, PencilCommentChange) -> Void) {
         self.change = change
         guard self.comments != comments || self.enabled != enabled else { return }
@@ -69,6 +77,7 @@ final class PencilCommentLayer {
         rebuilding = true; defer { rebuilding = false }
         needsRebuild = false; lastWidth = container.size.width
         let active = attached
+        let hadDecorations = !notes.isEmpty || !marks.isEmpty || !connectors.isEmpty
         let ids = Set(active.map(\.id))
         for note in notes where !ids.contains(note.comment.id) {
             if view.window?.firstResponder === note.editor { view.window?.makeFirstResponder(view) }
@@ -78,11 +87,12 @@ final class PencilCommentLayer {
         marks = []; connectors = []
         // An empty margin must not force TextKit to lay out the entire chapter.
         guard !active.isEmpty else {
-            if view.minSize.height != 0 {
+            let resized = view.minSize.height != 0
+            if resized {
                 view.minSize = NSSize(width: 0, height: 0)
                 view.sizeToFit()
             }
-            view.needsDisplay = true
+            if hadDecorations || resized { view.needsDisplay = true }
             return
         }
         manager.ensureLayout(for: container)

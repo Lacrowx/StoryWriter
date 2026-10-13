@@ -45,7 +45,7 @@ final class EditorController: ObservableObject {
                 }
             }
         }
-        grammar?.selectionChanged()
+        grammar?.selectionChanged(whileTyping: whileTyping)
         if NSMaxRange(range) <= (view.string as NSString).length {
             let selected = (view.string as NSString).substring(with: range)
             if selectionText != selected {

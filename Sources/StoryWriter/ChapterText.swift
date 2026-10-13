@@ -23,7 +23,10 @@ struct ChapterText: Codable, Equatable {
         let text: NSAttributedString
         private var archive: Data?
         private let archiveLock = NSLock()
-        init(_ text: NSAttributedString) { self.text = NSAttributedString(attributedString: text) }
+        // NSTextView already supplies an immutable attributed snapshot. Copy
+        // retains it cheaply, while still freezing mutable storage supplied by
+        // other editing paths.
+        init(_ text: NSAttributedString) { self.text = text.copy() as! NSAttributedString }
         func data() throws -> Data {
             archiveLock.lock()
             defer { archiveLock.unlock() }

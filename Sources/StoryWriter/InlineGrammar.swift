@@ -294,7 +294,9 @@ final class InlineGrammarSession: NSObject, ObservableObject {
     @Published var checking = false
     @Published var message: String?
     @Published var reviewed = false
-    @Published private var selection = NSRange(location: 0, length: 0)
+    private var selection = NSRange(location: 0, length: 0)
+    private var selectionRefresh: Task<Void, Never>?
+    private var selectionRefreshIsTyping = false
     private(set) var snapshot = ""
     private var task: Task<Void, Never>?
     private var applying = false
@@ -335,7 +337,7 @@ final class InlineGrammarSession: NSObject, ObservableObject {
             }
         }
     }
-    deinit { task?.cancel(); continuationTask?.cancel(); if let cacheObserver { NotificationCenter.default.removeObserver(cacheObserver) } }
+    deinit { task?.cancel(); continuationTask?.cancel(); selectionRefresh?.cancel(); if let cacheObserver { NotificationCenter.default.removeObserver(cacheObserver) } }
 
     func textChanged(automatic: Bool = true, text: String? = nil) {
         guard let view else { return }
@@ -404,12 +406,29 @@ final class InlineGrammarSession: NSObject, ObservableObject {
 
     func cancel() { task?.cancel(); continuationTask?.cancel(); checking = false; pending = false }
     func resetReview() { cancel(); popover?.close(); corrections = []; reviewed = false; message = nil; drawMarks() }
-    func selectionChanged() {
-        if let range = view?.selectedRange(), range != selection { selection = range }
+    func selectionChanged(whileTyping: Bool = false) {
+        guard let range = view?.selectedRange(), range != selection || whileTyping else { return }
+        selection = range
+        // Only the Accept menu depends on the caret. An empty review bar has
+        // no selection-dependent controls and must not redraw for each key.
+        guard !corrections.isEmpty else {
+            selectionRefresh?.cancel(); selectionRefresh = nil
+            return
+        }
+        if whileTyping || selectionRefresh == nil || selectionRefreshIsTyping {
+            selectionRefresh?.cancel()
+            selectionRefreshIsTyping = whileTyping
+            selectionRefresh = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: whileTyping ? 350_000_000 : 16_000_000)
+                guard !Task.isCancelled, let self else { return }
+                selectionRefresh = nil
+                if !corrections.isEmpty { objectWillChange.send() }
+            }
+        }
     }
     func dismiss(_ id: UUID) { continuationTask?.cancel(); corrections.removeAll { $0.id == id }; popover?.close(); drawMarks() }
     func selectedCorrections(_ scope: GrammarScope, anchor: NSRange? = nil) -> [LocatedCorrection] {
-        guard let view else { return [] }
+        guard !corrections.isEmpty, let view else { return [] }
         let range = GrammarText.range(for: scope, in: view.string, selection: anchor ?? view.selectedRange())
         return corrections.filter { $0.range.location >= range.location && NSMaxRange($0.range) <= NSMaxRange(range) }
     }

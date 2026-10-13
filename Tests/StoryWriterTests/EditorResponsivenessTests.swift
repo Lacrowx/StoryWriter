@@ -5,6 +5,58 @@ import Combine
 @testable import StoryWriter
 
 final class EditorResponsivenessTests: XCTestCase {
+    @MainActor func testEmptyCommentMarginDoesNotForceFullRedrawForEdits() {
+        let view = ManuscriptTextView(frame: .zero)
+        view.minSize = .zero // Match the manuscript's configured sizing.
+        let layer = PencilCommentLayer(view: view)
+        view.needsDisplay = false
+        layer.invalidate()
+        layer.layout()
+        XCTAssertFalse(view.needsDisplay, "An empty margin must preserve AppKit's localized typing redraw")
+    }
+
+    @MainActor func testReviewSelectionControlsWaitDuringTypingAndFollowNavigation() async throws {
+        let view = ManuscriptTextView(frame: .zero)
+        view.string = "She go home. The writer waits."
+        let grammar = InlineGrammarSession(view: view)
+        grammar.corrections = GrammarText.locate([
+            GrammarIssue(original: "She go", replacement: "She goes", explanation: "Agreement")
+        ], chunk: view.string, offset: 0)
+        var changes = 0
+        let observation = grammar.objectWillChange.sink { changes += 1 }
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        grammar.selectionChanged()
+        grammar.selectionChanged(whileTyping: true)
+        try await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(changes, 0)
+        view.setSelectedRange(NSRange(location: 4, length: 0))
+        grammar.selectionChanged()
+        try await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(changes, 1)
+        view.setSelectedRange(grammar.corrections[0].range)
+        XCTAssertEqual(grammar.selectedCorrections(.selection), grammar.corrections, "Commands always use the current selection")
+        grammar.selectionChanged(whileTyping: true)
+        grammar.corrections = []
+        let before = changes
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(changes, before, "Cleared corrections need no delayed selection redraw")
+        withExtendedLifetime(observation) {}
+    }
+
+    @MainActor func testCaretMovesWithoutCorrectionsDoNotRedrawReviewBar() {
+        let view = ManuscriptTextView(frame: .zero)
+        view.string = "The writer follows the story."
+        let grammar = InlineGrammarSession(view: view)
+        var changes = 0
+        let observation = grammar.objectWillChange.sink { changes += 1 }
+        for location in 1..<20 {
+            view.setSelectedRange(NSRange(location: location, length: 0))
+            grammar.selectionChanged()
+        }
+        XCTAssertEqual(changes, 0, "A moving caret changes no review controls when there are no corrections")
+        withExtendedLifetime(observation) {}
+    }
+
     @MainActor func testBulkTextCopyPreservesUnicodeAndDoesNotFollowLaterEdits() {
         let original = "Grüße 👩🏽‍💻 e\u{301}\r\n\u{FFFC}\u{0} End"
         let storage = NSTextStorage(string: original)

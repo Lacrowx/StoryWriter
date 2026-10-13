@@ -83,7 +83,7 @@ struct PlainWritingEditor: NSViewRepresentable {
         init(_ parent: PlainWritingEditor) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? ManuscriptTextView else { return }
-            lastText = view.string; parent.text = view.string; parent.controller.refresh(); view.grammarSession?.textChanged()
+            lastText = view.string; parent.text = view.string; parent.controller.refresh(whileTyping: true); view.grammarSession?.textChanged()
             view.objectNames?.textChanged()
         }
         func textViewDidChangeSelection(_ notification: Notification) {

@@ -75,7 +75,8 @@ extension Chapter {
         return NSRange(location: scene.start, length: max(0, end - scene.start))
     }
     mutating func rebaseAnnotations(from old: String, to new: String) {
-        guard old != new, scenes?.isEmpty == false || comments?.isEmpty == false || continuityEvents?.isEmpty == false else { return }
+        guard scenes?.isEmpty == false || comments?.isEmpty == false || continuityEvents?.isEmpty == false,
+              old != new else { return }
         let edit = PassageEdit(old: old, new: new)
         if let events = continuityEvents { continuityEvents = Continuity.rebase(events, old: old, new: new, edit: edit) }
         if var entries = scenes {

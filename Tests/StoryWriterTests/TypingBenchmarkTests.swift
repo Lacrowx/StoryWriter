@@ -1,11 +1,15 @@
 import XCTest
 import AppKit
 import SwiftUI
+import Combine
 @testable import StoryWriter
 
 /// End-to-end keystroke cost in the real workspace with a novel-length project.
 final class TypingBenchmarkTests: XCTestCase {
     @MainActor func testWorkspaceKeystrokeCost() throws {
+        let automatic = LocalGrammarService.shared.automatic
+        LocalGrammarService.shared.automatic = false
+        defer { LocalGrammarService.shared.automatic = automatic }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TypingBenchmark-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let defaults = UserDefaults(suiteName: "TypingBenchmark-\(UUID())")!
@@ -80,6 +84,48 @@ final class TypingBenchmarkTests: XCTestCase {
         print(String(format: "Workspace keystroke with continuity open, 100k-word project: median %.2f ms, p90 %.2f ms", sidebarMedian, sidebarSamples[sidebarSamples.count * 9 / 10]))
         XCTAssertLessThan(sidebarSamples[sidebarSamples.count * 9 / 10], 100)
         XCTAssertLessThan(sidebarMedian, 50, "Continuity must not make typing visibly lag")
+        let repetitions = max(100, min(1000, Int(ProcessInfo.processInfo.environment["STORYWRITER_PROFILE_KEYS"] ?? "") ?? 100))
+        for deleting in [false, true] {
+            var eventSamples: [Double] = [], frameGaps: [Double] = []
+            var keyboardSamples: [Double] = [], layoutSamples: [Double] = [], drawSamples: [Double] = []
+            var grammarPublications = 0
+            let grammarObservation = view.grammarSession?.objectWillChange.sink { grammarPublications += 1 }
+            var cursorPublications = 0
+            let cursorObservation = view.contextEditor?.objectWillChange.sink { cursorPublications += 1 }
+            var previousTick = CFAbsoluteTimeGetCurrent()
+            let heartbeat = Timer.scheduledTimer(withTimeInterval: 0.005, repeats: true) { _ in
+                let now = CFAbsoluteTimeGetCurrent()
+                frameGaps.append((now - previousTick) * 1000)
+                previousTick = now
+            }
+            for _ in 0..<repetitions {
+                let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                    characters: deleting ? "\u{7f}" : "a", charactersIgnoringModifiers: deleting ? "\u{7f}" : "a",
+                    isARepeat: deleting, keyCode: deleting ? 51 : 0))
+                let start = CFAbsoluteTimeGetCurrent()
+                view.keyDown(with: event)
+                let keyboardEnd = CFAbsoluteTimeGetCurrent()
+                window.contentView?.layoutSubtreeIfNeeded()
+                let layoutEnd = CFAbsoluteTimeGetCurrent()
+                window.displayIfNeeded()
+                let drawEnd = CFAbsoluteTimeGetCurrent()
+                keyboardSamples.append((keyboardEnd - start) * 1000)
+                layoutSamples.append((layoutEnd - keyboardEnd) * 1000)
+                drawSamples.append((drawEnd - layoutEnd) * 1000)
+                eventSamples.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
+                pump(0.02)
+            }
+            heartbeat.invalidate()
+            withExtendedLifetime((cursorObservation, grammarObservation)) {}
+            print("Review-bar publications during \(deleting ? "Backspace" : "typing"): \(grammarPublications)")
+            XCTAssertEqual(grammarPublications, 0, "Repeated keys must not redraw an empty review bar")
+            eventSamples.sort(); frameGaps.sort()
+            keyboardSamples.sort(); layoutSamples.sort(); drawSamples.sort()
+            XCTAssertLessThan(eventSamples[repetitions * 9 / 10], 100, "Sustained native input must remain responsive")
+            print(String(format: "Native %@, %d repeated keys: median %.2f ms, p90 %.2f ms, worst %.2f ms; longest main-loop gap %.2f ms", deleting ? "Backspace" : "typing", repetitions, eventSamples[repetitions / 2], eventSamples[repetitions * 9 / 10], eventSamples.last ?? 0, frameGaps.last ?? 0))
+            print(String(format: "Native %@ stages p90: keyboard %.2f ms; layout %.2f ms; draw %.2f ms; cursor publications %d", deleting ? "Backspace" : "typing", keyboardSamples[repetitions * 9 / 10], layoutSamples[repetitions * 9 / 10], drawSamples[repetitions * 9 / 10], cursorPublications))
+        }
     }
 
     static func all<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
