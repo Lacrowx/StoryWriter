@@ -179,6 +179,28 @@ final class EditorResponsivenessTests: XCTestCase {
 }
 
 final class TypingRefreshTests: XCTestCase {
+    @MainActor func testTypingDefersCursorPublicationAndNavigationResumesImmediately() async throws {
+        let editor = EditorController()
+        let view = ManuscriptTextView(frame: .zero)
+        view.string = "Hello there."
+        editor.textView = view
+        editor.refresh()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        var changes = 0
+        let observation = editor.objectWillChange.sink { changes += 1 }
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        editor.refresh() // Native selection notification precedes textDidChange.
+        editor.refresh(whileTyping: true)
+        try await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(changes, 0, "Typing must cancel the pending per-frame workspace redraw")
+        XCTAssertEqual(editor.selectionRange.location, 2)
+        view.setSelectedRange(NSRange(location: 4, length: 0))
+        editor.refresh() // Navigation should not wait for the typing pause.
+        try await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(changes, 1)
+        withExtendedLifetime(observation) {}
+    }
+
     @MainActor func testTypingUpdatesStoreAtOnceButRedrawsAfterPause() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TypingRefresh-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

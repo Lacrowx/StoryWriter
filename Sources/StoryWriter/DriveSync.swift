@@ -124,7 +124,9 @@ final class DriveSync: ObservableObject {
         let deviceName = Host.current().localizedName ?? "Another Mac"
         status = "Checking for changes…"
         do {
-            guard store.saveNow() else { status = "Save locally before syncing"; return }
+            let saved = await store.saveCurrentInBackground()
+            guard currentEpoch(generation) else { return }
+            guard saved else { status = "Save locally before syncing"; return }
             var locals: [UUID: DriveRevision] = [:]
             // Publish durable local branches first, even while a conflict is open.
             for snapshot in store.projects {

@@ -39,6 +39,9 @@ final class ProjectStore: ObservableObject {
     var workspacePreferences: WorkspacePreferences { WorkspacePreferences(root: root, defaults: workspaceDefaults) }
     private var saveTask: Task<Void, Never>?
     private var dirty = Set<UUID>()
+    private var editGenerations: [UUID: UUID] = [:]
+    let persistence = ProjectPersistence()
+    private var backgroundSave: Task<Bool, Never>?
     private var lastRevision: [UUID: Date] = [:]
     private var syncObservation: AnyCancellable?
     lazy var sync: DriveSync = {
@@ -63,7 +66,7 @@ final class ProjectStore: ObservableObject {
                 } catch { errorMessage = "Could not open \(directory.lastPathComponent). Your files were left in place. \(error.localizedDescription)" }
             }
             projects.sort { $0.modifiedAt > $1.modifiedAt }
-            if directories.isEmpty && createExample { let example = StoryProject.example(); projects.append(example); dirty.insert(example.id); _ = saveNow() }
+            if directories.isEmpty && createExample { let example = StoryProject.example(); projects.append(example); markDirty(example.id); _ = saveNow() }
             selectedProjectID = workspacePreferences.resumesWorkspace ? projects.first(where: { $0.id == workspacePreferences.projectID && !$0.archived })?.id
                 ?? projects.first(where: { !$0.archived })?.id : nil
             loadBackupSettings()
@@ -115,13 +118,13 @@ final class ProjectStore: ObservableObject {
             mentionLinkTasks.removeValue(forKey: id)?.cancel(); pendingMentionLinks.removeValue(forKey: id)
         }
         projects[index].modifiedAt = Date()
-        dirty.insert(id); if saveStatus != "Saving…" { saveStatus = "Saving…" }
+        markDirty(id); if saveStatus != "Saving…" { saveStatus = "Saving…" }
         saveTask?.cancel()
         let delay = ApplicationPreferences(defaults: workspaceDefaults).autosaveDelay
         saveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            _ = self?.saveNow()
+            _ = await self?.saveInBackground()
         }
     }
 
@@ -147,47 +150,83 @@ final class ProjectStore: ObservableObject {
     @discardableResult func create(title: String, kind: ProjectKind) -> UUID {
         let project = StoryProject.new(title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled \(kind.label.lowercased())" : title, kind: kind)
         showArchived = false; search = ""
-        projects.insert(project, at: 0); selectedProjectID = project.id; dirty.insert(project.id); _ = saveNow()
+        projects.insert(project, at: 0); selectedProjectID = project.id; markDirty(project.id); _ = saveNow()
         return project.id
+    }
+
+    private func markDirty(_ id: UUID) {
+        dirty.insert(id)
+        editGenerations[id] = UUID()
+    }
+
+    private func saveRequests() -> [ProjectPersistence.Request] {
+        for id in Array(pendingMentionLinks.keys) { flushMentionLinks(id) }
+        let interval = ApplicationPreferences(defaults: workspaceDefaults).revisionInterval
+        return dirty.compactMap { id in
+            guard let project = project(id), let generation = editGenerations[id] else { return nil }
+            return ProjectPersistence.Request(project: project, directory: packageURL(id), generation: generation,
+                revisionDue: Date().timeIntervalSince(lastRevision[id] ?? .distantPast) > interval)
+        }
+    }
+
+    private func finishSave(_ outcomes: [ProjectPersistence.Outcome]) -> Bool {
+        var failed = false
+        for outcome in outcomes {
+            if let date = outcome.revisionDate { lastRevision[outcome.id] = max(lastRevision[outcome.id] ?? .distantPast, date) }
+            // An older completion cannot clear or report failure for newer edits.
+            guard editGenerations[outcome.id] == outcome.generation else { continue }
+            if let error = outcome.error {
+                failed = true; errorMessage = "Your latest changes could not be saved: \(error)"
+            } else {
+                dirty.remove(outcome.id)
+                editGenerations.removeValue(forKey: outcome.id)
+                scheduleBackup(outcome.id)
+            }
+        }
+        let status = failed ? "Save failed — retry with ⌘S" : dirty.isEmpty ? "Saved on this Mac" : "Saving…"
+        if saveStatus != status { saveStatus = status }
+        if outcomes.contains(where: { $0.error == nil }) { sync.saved() }
+        return !failed
+    }
+
+    /// Automatic saves, sync, and backup preparation leave the main actor free.
+    @discardableResult func saveInBackground() async -> Bool {
+        if let backgroundSave {
+            guard await backgroundSave.value else { return false }
+            return await saveInBackground()
+        }
+        let requests = saveRequests()
+        guard !requests.isEmpty else { return true }
+        let writing = persistence.save(requests)
+        let task = Task { [self] in
+            let outcomes = await writing.value
+            let success = finishSave(outcomes)
+            backgroundSave = nil
+            return success
+        }
+        backgroundSave = task
+        return await task.value
+    }
+
+    func saveCurrentInBackground() async -> Bool {
+        repeat {
+            guard !Task.isCancelled, await saveInBackground() else { return false }
+        } while !dirty.isEmpty
+        return true
     }
 
     @discardableResult func saveNow() -> Bool {
         saveTask?.cancel()
-        for id in Array(pendingMentionLinks.keys) { flushMentionLinks(id) }
-        let hadChanges = !dirty.isEmpty
-        var failed = false
-        for id in Array(dirty) {
-            guard let project = project(id) else { continue }
-            do {
-                let directory = packageURL(id)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                let manifest = directory.appendingPathComponent("project.json")
-                if FileManager.default.fileExists(atPath: manifest.path), Date().timeIntervalSince(lastRevision[id] ?? .distantPast) > ApplicationPreferences(defaults: workspaceDefaults).revisionInterval {
-                    try checkpoint(id)
-                }
-                let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
-                try encoder.encode(project).write(to: manifest, options: .atomic)
-                dirty.remove(id)
-                scheduleBackup(id)
-            } catch { failed = true; errorMessage = "Your latest changes could not be saved: \(error.localizedDescription)" }
-        }
-        saveStatus = failed ? "Save failed — retry with ⌘S" : "Saved on this Mac"
-        if !failed && hadChanges { sync.saved() }
-        return !failed
+        // Even with no dirty projects this drains older queued writes before
+        // quit, recovery, export, or other explicit package operations.
+        return finishSave(persistence.saveNow(saveRequests()))
     }
 
     func checkpoint(_ id: UUID, name: String? = nil) throws {
         let directory = packageURL(id)
-        let manifest = directory.appendingPathComponent("project.json")
-        guard FileManager.default.fileExists(atPath: manifest.path) else { return }
-        let history = directory.appendingPathComponent("History", isDirectory: true)
-        try FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
-        let date = Date()
-        let revision = history.appendingPathComponent("\(date.timeIntervalSince1970)-\(UUID().uuidString).json")
-        try FileManager.default.copyItem(at: manifest, to: revision)
-        if let name { try name.write(to: revision.appendingPathExtension("label"), atomically: true, encoding: .utf8) }
-        lastRevision[id] = date
-        for old in revisions(id).filter({ $0.name == nil }).dropFirst(30) { try FileManager.default.removeItem(at: old.url) }
+        if let date = try persistence.queue.sync(execute: { try ProjectPersistence.checkpoint(directory, name: name) }) {
+            lastRevision[id] = date
+        }
     }
 
     func revisions(_ id: UUID) -> [Revision] {
@@ -221,7 +260,7 @@ final class ProjectStore: ObservableObject {
             try encoder.encode(imported).write(to: destination.appendingPathComponent("project.json"), options: .atomic)
             lastRevision[imported.id] = Date()
             showArchived = false; search = ""
-            projects.insert(imported, at: 0); dirty.insert(imported.id); selectedProjectID = imported.id; _ = saveNow()
+            projects.insert(imported, at: 0); markDirty(imported.id); selectedProjectID = imported.id; _ = saveNow()
         } catch { errorMessage = "Could not import project: \(error.localizedDescription)" }
     }
 

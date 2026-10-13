@@ -21,9 +21,12 @@ struct ChapterText: Codable, Equatable {
 
     private final class Snapshot {
         let text: NSAttributedString
-        var archive: Data?
+        private var archive: Data?
+        private let archiveLock = NSLock()
         init(_ text: NSAttributedString) { self.text = NSAttributedString(attributedString: text) }
         func data() throws -> Data {
+            archiveLock.lock()
+            defer { archiveLock.unlock() }
             if let archive { return archive }
             let data = try text.data(from: NSRange(location: 0, length: text.length),
                                      documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd])

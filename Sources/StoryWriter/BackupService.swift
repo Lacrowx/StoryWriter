@@ -80,7 +80,12 @@ extension ProjectStore {
         backupTasks[id] = Task { [weak self] in
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             guard let self, !Task.isCancelled, self.backupGenerations[id] == generation else { return }
-            guard self.saveNow(), let current = self.project(id), self.backupConfigurations[id]?.folder == configuration.folder else { self.backupTasks[id] = nil; return }
+            // Edits arriving during a save need a fresh durable snapshot before
+            // recording this backup as current.
+            guard await self.saveCurrentInBackground(), !Task.isCancelled, self.backupGenerations[id] == generation, let current = self.project(id), self.backupConfigurations[id]?.folder == configuration.folder else {
+                if self.backupGenerations[id] == generation { self.backupTasks[id] = nil }
+                return
+            }
             let package = self.packageURL(id), folder = URL(fileURLWithPath: configuration.folder, isDirectory: true)
             let modified = current.modifiedAt
             self.backupRunning.insert(id)

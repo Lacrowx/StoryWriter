@@ -77,7 +77,7 @@ extension Chapter {
     mutating func rebaseAnnotations(from old: String, to new: String) {
         guard old != new, scenes?.isEmpty == false || comments?.isEmpty == false || continuityEvents?.isEmpty == false else { return }
         let edit = PassageEdit(old: old, new: new)
-        if let events = continuityEvents { continuityEvents = Continuity.rebase(events, old: old, new: new) }
+        if let events = continuityEvents { continuityEvents = Continuity.rebase(events, old: old, new: new, edit: edit) }
         if var entries = scenes {
             for i in entries.indices { entries[i].start = min(new.utf16.count, edit.boundary(entries[i].start)) }
             if !entries.isEmpty { entries[0].start = 0 }

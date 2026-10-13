@@ -18,21 +18,28 @@ final class EditorController: ObservableObject {
     /// Always current; publish at most once per display frame without waiting for movement to stop.
     private(set) var selectionRange = NSRange(location: 0, length: 0)
     private var selectionSettle: Task<Void, Never>?
+    private var selectionSettleIsTyping = false
     private var positionChapterID: UUID?
     @Published var grammar: InlineGrammarSession?
     @Published var tags: ObjectTagSession?
     @Published var objectNames: ObjectNameSession?
     @Published var pendingCommentFocus: UUID?
 
-    func refresh() {
+    func refresh(whileTyping: Bool = false) {
         guard let view = textView else { return }
         let range = view.selectedRange()
-        if selectionRange != range || positionChapterID != chapterID {
+        let moved = selectionRange != range || positionChapterID != chapterID
+        if moved || whileTyping {
             selectionRange = range
             positionChapterID = chapterID
-            if selectionSettle == nil {
+            if whileTyping || selectionSettle == nil || selectionSettleIsTyping {
+                selectionSettle?.cancel()
+                selectionSettleIsTyping = whileTyping
                 selectionSettle = Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: 16_000_000)
+                    // AppKit paints typing immediately. Defer dependent SwiftUI
+                    // panels while typing, but follow navigation within one frame.
+                    try? await Task.sleep(nanoseconds: whileTyping ? 350_000_000 : 16_000_000)
+                    guard !Task.isCancelled else { return }
                     self?.selectionSettle = nil
                     self?.objectWillChange.send()
                 }
@@ -601,7 +608,7 @@ struct RichTextEditor: NSViewRepresentable {
             var changed = parent.chapter
             changed.setEditingText(view.attributedString())
             lastData = changed.richText; parent.chapter = changed
-            parent.controller.refresh()
+            parent.controller.refresh(whileTyping: true)
             (view as? ManuscriptTextView)?.grammarSession?.textChanged(text: changed.plainText)
             (view as? ManuscriptTextView)?.tagSession?.refreshSuggestions()
             (view as? ManuscriptTextView)?.tagSession?.refreshCompletion()

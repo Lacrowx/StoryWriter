@@ -58,7 +58,8 @@ final class TypingBenchmarkTests: XCTestCase {
         let typed = try XCTUnwrap(store.project(id)!.chapters.first { $0.plainText.contains("The quick brown fox") })
         let comment = try XCTUnwrap(typed.comments?.first)
         XCTAssertEqual((typed.plainText as NSString).substring(with: comment.range), comment.quote)
-        XCTAssertLessThan(median, 100, "Typing has regressed to a visible lag") // Was ~800 ms before render throttling.
+        XCTAssertLessThan(p90, 100, "Occasional keystrokes must also stay responsive")
+        XCTAssertLessThan(median, 50, "Typing has regressed to a visible lag") // Was ~800 ms before render throttling.
         func command(_ title: String, in commands: [ContextCommand]) -> ContextCommand? {
             for item in commands {
                 if item.title == title { return item }
@@ -77,7 +78,8 @@ final class TypingBenchmarkTests: XCTestCase {
         sidebarSamples.sort()
         let sidebarMedian = sidebarSamples[sidebarSamples.count / 2]
         print(String(format: "Workspace keystroke with continuity open, 100k-word project: median %.2f ms, p90 %.2f ms", sidebarMedian, sidebarSamples[sidebarSamples.count * 9 / 10]))
-        XCTAssertLessThan(sidebarMedian, 100, "Continuity must not make typing visibly lag")
+        XCTAssertLessThan(sidebarSamples[sidebarSamples.count * 9 / 10], 100)
+        XCTAssertLessThan(sidebarMedian, 50, "Continuity must not make typing visibly lag")
     }
 
     static func all<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {

@@ -228,8 +228,8 @@ enum Continuity {
         let source = text as NSString
         return [range.location, NSMaxRange(range)].allSatisfy { $0 == source.length || source.rangeOfComposedCharacterSequence(at: $0).location == $0 }
     }
-    static func rebase(_ events: [ContinuityEvent], old: String, new: String) -> [ContinuityEvent] {
-        let edit = PassageEdit(old: old, new: new)
+    static func rebase(_ events: [ContinuityEvent], old: String, new: String, edit suppliedEdit: PassageEdit? = nil) -> [ContinuityEvent] {
+        let edit = suppliedEdit ?? PassageEdit(old: old, new: new)
         return events.map { original in
             var event = original
             guard !event.detached else { return event }
