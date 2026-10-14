@@ -15,7 +15,7 @@ final class ApplicationPreferencesTests: XCTestCase {
         XCTAssertTrue(preferences.resumesWorkspace)
         XCTAssertTrue(preferences.discoversNames)
         XCTAssertTrue(preferences.selectionActions)
-        XCTAssertEqual(preferences.autosaveDelay, 0.7)
+        XCTAssertEqual(preferences.autosaveDelay, 2)
         XCTAssertEqual(preferences.revisionInterval, 300)
         XCTAssertEqual(preferences.backupInterval, 300)
         XCTAssertEqual(preferences.reviewDelay, 2)
@@ -46,7 +46,7 @@ final class ApplicationPreferencesTests: XCTestCase {
         XCTAssertEqual(reopened.autosaveDelay, 5)
         XCTAssertEqual(reopened.paperMargins, .generous)
         defaults.removeObject(forKey: "autosaveDelay")
-        XCTAssertEqual(reopened.autosaveDelay, 0.7)
+        XCTAssertEqual(reopened.autosaveDelay, 2)
     }
 
     func testStartingTypographyUsesChosenFontAndSpacing() throws {

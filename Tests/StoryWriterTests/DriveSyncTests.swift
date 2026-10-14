@@ -3,6 +3,24 @@ import AppKit
 @testable import StoryWriter
 
 final class DriveSyncTests: XCTestCase {
+    @MainActor func testBackgroundCheckDoesNotBypassAutosaveOrOverwritePendingWriting() async throws {
+        let (a, b, id, _) = try await pair()
+        a.updateWhileTyping(id) { $0.premise = "Unsaved writing" }
+        b.update(id) { $0.premise = "Remote writing" }
+        await b.sync.checkNow()
+        await a.sync.checkNow(savePending: false)
+        XCTAssertTrue(a.hasUnsavedChanges)
+        XCTAssertEqual(a.project(id)?.premise, "Unsaved writing")
+        XCTAssertEqual(try ProjectStore.readPackage(a.packageURL(id)).premise, "")
+        XCTAssertTrue(a.sync.reviews.isEmpty)
+        // A deliberate sync request still saves and reviews the divergent edits.
+        await a.sync.checkNow()
+        XCTAssertFalse(a.hasUnsavedChanges)
+        XCTAssertEqual(try ProjectStore.readPackage(a.packageURL(id)).premise, "Unsaved writing")
+        XCTAssertNotNil(a.sync.reviews[id])
+        a.sync.disconnect(); b.sync.disconnect()
+    }
+
     private func directory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("StoryWriterSyncTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

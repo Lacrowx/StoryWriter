@@ -74,23 +74,27 @@ extension ProjectStore {
             guard immediately, !backupRunning.contains(id) else { return }
             backupTasks[id]?.cancel(); backupTasks[id] = nil
         }
-        let delay = immediately ? 0 : max(0, ApplicationPreferences().backupInterval - Date().timeIntervalSince(configuration.lastSuccess ?? .distantPast))
+        let delay = immediately ? 0 : max(0, ApplicationPreferences(defaults: workspaceDefaults).backupInterval - Date().timeIntervalSince(configuration.lastSuccess ?? .distantPast))
         let generation = UUID()
         backupGenerations[id] = generation
         backupTasks[id] = Task { [weak self] in
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             guard let self, !Task.isCancelled, self.backupGenerations[id] == generation else { return }
-            // Edits arriving during a save need a fresh durable snapshot before
-            // recording this backup as current.
-            guard await self.saveCurrentInBackground(), !Task.isCancelled, self.backupGenerations[id] == generation, let current = self.project(id), self.backupConfigurations[id]?.folder == configuration.folder else {
+            if !immediately, self.hasUnsavedChanges {
+                self.backupTasks[id] = nil // The next successful autosave schedules it again.
+                return
+            }
+            // Scheduled backups copy saved writing without bypassing autosave.
+            // An explicit backup first saves the current snapshot once.
+            let saved = immediately ? await self.saveInBackground() : true
+            guard saved, !Task.isCancelled, self.backupGenerations[id] == generation, self.project(id) != nil, self.backupConfigurations[id]?.folder == configuration.folder else {
                 if self.backupGenerations[id] == generation { self.backupTasks[id] = nil }
                 return
             }
             let package = self.packageURL(id), folder = URL(fileURLWithPath: configuration.folder, isDirectory: true)
-            let modified = current.modifiedAt
             self.backupRunning.insert(id)
             do {
-                _ = try await Task.detached(priority: .utility) { try PortableBackup.validate(folder: folder, library: package.deletingLastPathComponent()); return try PortableBackup.copy(package: package, to: folder) }.value
+                let modified = try await self.persistence.backup(package: package, folder: folder)
                 guard !Task.isCancelled, self.backupGenerations[id] == generation else { return }
                 guard self.backupConfigurations[id]?.folder == configuration.folder else { self.backupTasks[id] = nil; return }
                 self.backupConfigurations[id]?.lastSuccess = Date(); self.backupConfigurations[id]?.lastModified = modified; self.backupConfigurations[id]?.error = nil

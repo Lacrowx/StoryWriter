@@ -131,6 +131,8 @@ final class StoryToolsTests: XCTestCase {
         try store.configureBackup(id, folder: backups)
         let task = try XCTUnwrap(store.backupTasks[id]); await task.value
         XCTAssertNotNil(store.backupConfigurations[id]?.lastSuccess)
+        XCTAssertEqual(store.backupConfigurations[id]?.lastModified, store.project(id)?.modifiedAt)
+        XCTAssertNil(store.backupTasks[id], "Unchanged saved writing must not schedule another backup")
         let copies = try FileManager.default.contentsOfDirectory(at: backups, includingPropertiesForKeys: nil).filter { $0.pathExtension == "storywriter" }
         XCTAssertEqual(copies.count, 1)
         let snapshot = try ProjectStore.readPackage(copies[0])

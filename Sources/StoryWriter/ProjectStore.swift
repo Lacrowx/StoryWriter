@@ -35,9 +35,10 @@ final class ProjectStore: ObservableObject {
     var backupGenerations: [UUID: UUID] = [:]
     var backupRunning = Set<UUID>()
     let root: URL
-    private let workspaceDefaults: UserDefaults
+    let workspaceDefaults: UserDefaults
     var workspacePreferences: WorkspacePreferences { WorkspacePreferences(root: root, defaults: workspaceDefaults) }
     private var saveTask: Task<Void, Never>?
+    private var autosave = AutosaveSchedule()
     private var dirty = Set<UUID>()
     private var editGenerations: [UUID: UUID] = [:]
     let persistence = ProjectPersistence()
@@ -63,6 +64,7 @@ final class ProjectStore: ObservableObject {
                     let project = try Self.readPackage(directory)
                     guard directory.lastPathComponent == "\(project.id.uuidString).storywriter" else { throw ProjectError.invalid("Project folder and identifier do not match.") }
                     projects.append(project)
+                    lastRevision[project.id] = revisions(project.id).first?.date ?? project.modifiedAt
                 } catch { errorMessage = "Could not open \(directory.lastPathComponent). Your files were left in place. \(error.localizedDescription)" }
             }
             projects.sort { $0.modifiedAt > $1.modifiedAt }
@@ -119,12 +121,32 @@ final class ProjectStore: ObservableObject {
         }
         projects[index].modifiedAt = Date()
         markDirty(id); if saveStatus != "Saving…" { saveStatus = "Saving…" }
-        saveTask?.cancel()
-        let delay = ApplicationPreferences(defaults: workspaceDefaults).autosaveDelay
+        autosave.edited(at: ProcessInfo.processInfo.systemUptime)
+        scheduleAutosave()
+    }
+
+    var hasUnsavedChanges: Bool { !dirty.isEmpty }
+
+    private func autosaveDeadline() -> TimeInterval? {
+        autosave.deadline(idleDelay: ApplicationPreferences(defaults: workspaceDefaults).autosaveDelay)
+    }
+
+    private func scheduleAutosave() {
+        // One sleeper per editing batch, rather than a cancelled Task and a
+        // preferences lookup for every keystroke. Recheck the deadline on waking.
+        guard saveTask == nil else { return }
         saveTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            _ = await self?.saveInBackground()
+            while !Task.isCancelled, let deadline = self?.autosaveDeadline() {
+                let delay = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+                do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+                catch { return }
+                guard !Task.isCancelled, let self else { return }
+                guard let current = self.autosaveDeadline(), current <= ProcessInfo.processInfo.systemUptime else { continue }
+                let success = await self.saveInBackground()
+                guard !Task.isCancelled else { return }
+                if !success { break }
+            }
+            self?.saveTask = nil
         }
     }
 
@@ -171,6 +193,7 @@ final class ProjectStore: ObservableObject {
 
     private func finishSave(_ outcomes: [ProjectPersistence.Outcome]) -> Bool {
         var failed = false
+        if outcomes.contains(where: { $0.error == nil }) { autosave.saved(at: ProcessInfo.processInfo.systemUptime) }
         for outcome in outcomes {
             if let date = outcome.revisionDate { lastRevision[outcome.id] = max(lastRevision[outcome.id] ?? .distantPast, date) }
             // An older completion cannot clear or report failure for newer edits.
@@ -184,6 +207,8 @@ final class ProjectStore: ObservableObject {
             }
         }
         let status = failed ? "Save failed — retry with ⌘S" : dirty.isEmpty ? "Saved on this Mac" : "Saving…"
+        if dirty.isEmpty { autosave.beganSave() }
+        else if autosave.pendingSince == nil { autosave.edited(at: ProcessInfo.processInfo.systemUptime) }
         if saveStatus != status { saveStatus = status }
         if outcomes.contains(where: { $0.error == nil }) { sync.saved() }
         return !failed
@@ -197,6 +222,7 @@ final class ProjectStore: ObservableObject {
         }
         let requests = saveRequests()
         guard !requests.isEmpty else { return true }
+        autosave.beganSave()
         let writing = persistence.save(requests)
         let task = Task { [self] in
             let outcomes = await writing.value
@@ -216,7 +242,8 @@ final class ProjectStore: ObservableObject {
     }
 
     @discardableResult func saveNow() -> Bool {
-        saveTask?.cancel()
+        saveTask?.cancel(); saveTask = nil
+        autosave.beganSave()
         // Even with no dirty projects this drains older queued writes before
         // quit, recovery, export, or other explicit package operations.
         return finishSave(persistence.saveNow(saveRequests()))

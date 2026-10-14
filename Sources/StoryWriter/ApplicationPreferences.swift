@@ -56,7 +56,7 @@ struct ApplicationPreferences {
         return min(range.upperBound, max(range.lowerBound, value))
     }
     var resumesWorkspace: Bool { bool("resumeWorkspace", fallback: true) }
-    var autosaveDelay: Double { number("autosaveDelay", fallback: 0.7, range: 0.3...5) }
+    var autosaveDelay: Double { number("autosaveDelay", fallback: 2, range: 0.3...5) }
     var revisionInterval: Double { number("revisionInterval", fallback: 300, range: 60...1800) }
     var backupInterval: Double { number("backupInterval", fallback: 300, range: 60...1800) }
     var reviewDelay: Double { number("reviewDelay", fallback: 2, range: 1...10) }

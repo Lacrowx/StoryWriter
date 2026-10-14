@@ -93,7 +93,7 @@ final class DriveSync: ObservableObject {
         started = true
         timer = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.checkNow()
+                await self?.checkNow(savePending: false)
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         }
@@ -106,7 +106,7 @@ final class DriveSync: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled else { return }
             self?.scheduled = nil
-            await self?.checkNow()
+            await self?.checkNow(savePending: false)
         }
     }
     func projectStatus(_ id: UUID) -> String { reviews[id] != nil ? "Changes need review" : status }
@@ -117,14 +117,16 @@ final class DriveSync: ObservableObject {
     }
     private func currentEpoch(_ expected: UUID) -> Bool { epoch == expected && folder != nil && !Task.isCancelled }
 
-    func checkNow() async {
+    func checkNow(savePending: Bool = true) async {
         guard !running, let folder, let store else { return }
+        if !savePending, store.hasUnsavedChanges { return }
         running = true; defer { running = false }
         let generation = epoch, cache = cache, deviceID = state.deviceID
         let deviceName = Host.current().localizedName ?? "Another Mac"
         status = "Checking for changes…"
         do {
-            let saved = await store.saveCurrentInBackground()
+            var saved = true
+            if savePending { saved = await store.saveCurrentInBackground() }
             guard currentEpoch(generation) else { return }
             guard saved else { status = "Save locally before syncing"; return }
             var locals: [UUID: DriveRevision] = [:]
@@ -238,6 +240,7 @@ final class DriveSync: ObservableObject {
 
     private func apply(_ revision: DriveRevision, expected: StoryProject?, generation: UUID) async throws -> Bool {
         guard let store, currentEpoch(generation), store.project(revision.project.id) == expected else { status = "Changes waiting to sync"; return false }
+        guard !store.hasUnsavedChanges else { status = "Changes waiting to sync"; return false }
         guard store.saveNow() else { throw ProjectError.invalid("Your latest local changes could not be saved.") }
         if expected != nil { try store.checkpoint(revision.project.id) }
         let package = store.packageURL(revision.project.id), cache = cache

@@ -3,6 +3,65 @@ import AppKit
 @testable import StoryWriter
 
 final class BackgroundSaveTests: XCTestCase {
+    @MainActor func testTypingBurstsAutosaveTogetherAndManualSaveStaysImmediate() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AutosaveBatch-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let name = "AutosaveBatch-\(UUID())", defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(0.3, forKey: "autosaveDelay")
+        let store = ProjectStore(root: root, createExample: false, workspaceDefaults: defaults)
+        let id = store.create(title: "Original", kind: .story)
+        for index in 0..<3 {
+            store.updateWhileTyping(id) { $0.premise = "Burst \(index)" }
+            try await Task.sleep(nanoseconds: 400_000_000)
+            XCTAssertEqual(try ProjectStore.readPackage(store.packageURL(id)).premise, "")
+        }
+        let deadline = Date().addingTimeInterval(12)
+        while store.hasUnsavedChanges, Date() < deadline { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertFalse(store.hasUnsavedChanges)
+        XCTAssertEqual(try ProjectStore.readPackage(store.packageURL(id)).premise, "Burst 2")
+        store.updateWhileTyping(id) { $0.premise = "Manual save" }
+        XCTAssertTrue(store.saveNow())
+        XCTAssertEqual(try ProjectStore.readPackage(store.packageURL(id)).premise, "Manual save")
+    }
+
+    @MainActor func testScheduledBackupWaitsForAutosaveInsteadOfFlushingTyping() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("BackupDebounce-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("backups")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let store = ProjectStore(root: root.appendingPathComponent("library"), createExample: false)
+        let id = store.create(title: "Original", kind: .story)
+        defer { store.disableBackup(id); UserDefaults.standard.removeObject(forKey: store.backupDefaultsKey) }
+        try store.configureBackup(id, folder: folder)
+        await store.backupTasks[id]?.value
+        store.backupConfigurations[id]?.lastSuccess = .distantPast
+        store.updateWhileTyping(id) { $0.premise = "Still typing" }
+        store.scheduleBackup(id)
+        await store.backupTasks[id]?.value
+        XCTAssertTrue(store.hasUnsavedChanges)
+        XCTAssertEqual(try ProjectStore.readPackage(store.packageURL(id)).premise, "")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).count, 1)
+        XCTAssertTrue(store.saveNow())
+        await store.backupTasks[id]?.value
+        let copies = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+        XCTAssertEqual(copies.count, 2)
+        XCTAssertTrue(try copies.map { try ProjectStore.readPackage($0).premise }.contains("Still typing"))
+    }
+
+    @MainActor func testReopeningKeepsAutomaticRevisionInterval() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("RevisionInterval-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ProjectStore(root: root, createExample: false)
+        let id = store.create(title: "Original", kind: .story)
+        store.update(id) { $0.title = "First draft" }; XCTAssertTrue(store.saveNow())
+        XCTAssertEqual(store.revisions(id).count, 1)
+        let reopened = ProjectStore(root: root, createExample: false)
+        reopened.update(id) { $0.title = "Second draft" }; XCTAssertTrue(reopened.saveNow())
+        XCTAssertEqual(reopened.revisions(id).count, 1)
+        XCTAssertEqual(try ProjectStore.readPackage(reopened.packageURL(id)).title, "Second draft")
+    }
+
     @MainActor func testChangingBackupFolderDuringSaveKeepsNewBackupScheduled() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("BackupRace-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

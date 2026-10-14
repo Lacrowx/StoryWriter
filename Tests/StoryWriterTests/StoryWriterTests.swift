@@ -85,10 +85,13 @@ final class StoryWriterTests: XCTestCase {
         XCTAssertEqual(store.project(id)?.chapters.count, 0)
         try store.addLink("example.com", title: "Reference", projectID: id)
         store.update(id) { $0.sources[0].notes = "A useful detail" }
-        try await Task.sleep(nanoseconds: 1_000_000_000)
+        let deadline = Date().addingTimeInterval(12)
+        while store.hasUnsavedChanges, Date() < deadline { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertFalse(store.hasUnsavedChanges, "The research edits must autosave without a manual save")
         let reopened = ProjectStore(root: root, createExample: false)
-        XCTAssertEqual(reopened.project(id)?.sources[0].notes, "A useful detail")
-        XCTAssertEqual(reopened.project(id)?.sources[0].webURL, "https://example.com")
+        let source = try XCTUnwrap(reopened.project(id)?.sources.first)
+        XCTAssertEqual(source.notes, "A useful detail")
+        XCTAssertEqual(source.webURL, "https://example.com")
     }
 
     @MainActor func testCorruptProjectIsNotOverwritten() async throws {

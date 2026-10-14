@@ -209,7 +209,7 @@ private struct WritingReviewSettings: View {
 
 private struct StorageSettings: View {
     @EnvironmentObject private var store: ProjectStore
-    @AppStorage("autosaveDelay") private var delay = 0.7
+    @AppStorage("autosaveDelay") private var delay = 2.0
     @AppStorage("revisionInterval") private var revisions = 300.0
     @AppStorage("backupInterval") private var backups = 300.0
     var body: some View {
@@ -217,9 +217,9 @@ private struct StorageSettings: View {
             Text(store.root.path).font(.caption).textSelection(.enabled)
             Button("Show library in Finder") { NSWorkspace.shared.activateFileViewerSelecting([store.root]) }
             Picker("Autosave after editing", selection: $delay) {
-                Text("0.3 seconds").tag(0.3); Text("0.7 seconds (default)").tag(0.7); Text("1 second").tag(1.0); Text("2 seconds").tag(2.0); Text("5 seconds").tag(5.0)
+                Text("0.3 seconds").tag(0.3); Text("0.7 seconds").tag(0.7); Text("1 second").tag(1.0); Text("2 seconds (default)").tag(2.0); Text("5 seconds").tag(5.0)
             }
-            Text("⌘S saves immediately. StoryWriter also saves before quitting.").settingsHint()
+            Text("Automatic saves are at least 10 seconds apart, with a save within 30 seconds during continuous typing. ⌘S saves immediately; quitting also saves first.").settingsHint()
             Picker("Automatic revision interval", selection: $revisions) { timingOptions }
             Text("A recovery revision is kept on the next changed save after this interval. The latest 30 automatic revisions and all named revisions are retained.").settingsHint()
         }

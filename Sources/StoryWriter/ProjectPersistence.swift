@@ -2,8 +2,12 @@ import Foundation
 
 /// One ordered writer per library. Encoding and automatic revision I/O run
 /// outside the main actor; explicit save/quit can drain the same writer.
-final class ProjectPersistence {
+// Mutable state is confined to `queue`; callers only enqueue ordered work.
+final class ProjectPersistence: @unchecked Sendable {
     let queue = DispatchQueue(label: "StoryWriter.project-persistence", qos: .utility)
+    // Preserve the in-memory edit timestamp's precision; the legacy JSON date
+    // format rounds to seconds. Access only on the ordered writer.
+    private var savedModificationDates: [UUID: Date] = [:]
 
     struct Request {
         let project: StoryProject
@@ -24,7 +28,7 @@ final class ProjectPersistence {
         // snapshot to be enqueued after a newer explicit save.
         let stream = AsyncStream<[Outcome]> { continuation in
             queue.async {
-                continuation.yield(Self.write(requests))
+                continuation.yield(self.write(requests))
                 continuation.finish()
             }
         }
@@ -34,9 +38,24 @@ final class ProjectPersistence {
         }
     }
     func saveNow(_ requests: [Request]) -> [Outcome] {
-        queue.sync { Self.write(requests) }
+        queue.sync { write(requests) }
     }
-    private static func write(_ requests: [Request]) -> [Outcome] {
+
+    func backup(package: URL, folder: URL) async throws -> Date {
+        // Serialize package copies with saves so the manifest and history
+        // belong to the same durable snapshot, even if typing continues.
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    try PortableBackup.validate(folder: folder, library: package.deletingLastPathComponent())
+                    let project = try ProjectStore.readPackage(package)
+                    _ = try PortableBackup.copy(package: package, to: folder)
+                    continuation.resume(returning: self.savedModificationDates[project.id] ?? project.modifiedAt)
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+    private func write(_ requests: [Request]) -> [Outcome] {
         requests.map { request in
             var result = Outcome(id: request.project.id, generation: request.generation)
             do {
@@ -46,8 +65,9 @@ final class ProjectPersistence {
                 encoder.dateEncodingStrategy = .iso8601
                 let data = try encoder.encode(request.project)
                 try FileManager.default.createDirectory(at: request.directory, withIntermediateDirectories: true)
-                if request.revisionDue { result.revisionDate = try checkpoint(request.directory) }
+                if request.revisionDue { result.revisionDate = try Self.checkpoint(request.directory) }
                 try data.write(to: request.directory.appendingPathComponent("project.json"), options: .atomic)
+                savedModificationDates[request.project.id] = request.project.modifiedAt
             } catch { result.error = error.localizedDescription }
             return result
         }
